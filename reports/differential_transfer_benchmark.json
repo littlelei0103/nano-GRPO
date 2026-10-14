@@ -1,0 +1,46 @@
+{
+  "benchmark": "DifferentialBugHunterTask",
+  "test_problem_count": 20,
+  "results": {
+    "base_model": {
+      "greedy_pass_rate": 0.05,
+      "sample_pass_rate": 0.2,
+      "greedy_solved": 1,
+      "sample_solved": 4,
+      "greedy_categories": {
+        "precondition_violation": 13,
+        "success": 1,
+        "missed_bug": 1,
+        "format_malformed": 4,
+        "golden_failed": 1
+      },
+      "sample_categories": {
+        "precondition_violation": 38,
+        "format_malformed": 29,
+        "success": 5,
+        "missed_bug": 7,
+        "golden_failed": 1
+      }
+    },
+    "transfer_counterexample_model": {
+      "adapter_path": "checkpoints_counterexample/20261014T102327Z-d1694cb8/checkpoint-best",
+      "greedy_pass_rate": 0.1,
+      "sample_pass_rate": 0.2,
+      "greedy_solved": 2,
+      "sample_solved": 4,
+      "greedy_categories": {
+        "precondition_violation": 10,
+        "format_malformed": 5,
+        "success": 2,
+        "missed_bug": 2,
+        "golden_failed": 1
+      },
+      "sample_categories": {
+        "precondition_violation": 36,
+        "format_malformed": 31,
+        "success": 7,
+        "missed_bug": 6
+      }
+    }
+  }
+}

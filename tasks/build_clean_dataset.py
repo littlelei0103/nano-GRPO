@@ -1,0 +1,2528 @@
+"""
+tasks/build_clean_dataset.py - 构建 100 道高质量、零注释泄漏、完全去重、严格三级隔离的 BugHunter 工业级数据集
+"""
+
+import os
+import sys
+import re
+import json
+import subprocess
+from typing import List, Dict, Any
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tasks.bug_hunter import verify_bug_exposure, validate_and_parse_assertion
+
+
+def clean_code_comments(code: str) -> str:
+    """彻底剥离代码中的所有注释，保证模型看不到任何 # BUG 提示，同时完美保护字符常量中的 '#'"""
+    import io, tokenize
+    try:
+        tokens = []
+        readline = io.BytesIO(code.encode('utf-8')).readline
+        for tok in tokenize.tokenize(readline):
+            if tok.type != tokenize.COMMENT:
+                tokens.append(tok)
+        cleaned = tokenize.untokenize(tokens).decode('utf-8')
+        lines = [line.rstrip() for line in cleaned.splitlines()]
+        res = '\n'.join([line for line in lines if line.strip() != ''])
+        return res
+    except Exception:
+        # 降级备用
+        return code
+
+
+def build_raw_categories() -> Dict[str, List[Dict[str, Any]]]:
+    """10 大核心算法门类，每门类包含 10 道独立手写经典题目"""
+    categories = {}
+
+    # =========================================================================
+    # 1. binary_search (二分搜索与极值边界) - 10 题
+    # =========================================================================
+    categories["binary_search"] = [
+        {
+            "id": "bs_standard_right_edge",
+            "spec": "Given a sorted list `arr` and `target`, return index of target, or -1 if not found.",
+            "buggy_code": (
+                "def target_func(arr: list[int], target: int) -> int:\n"
+                "    left, right = 0, len(arr) - 1\n"
+                "    while left < right:\n"
+                "        mid = (left + right) // 2\n"
+                "        if arr[mid] == target: return mid\n"
+                "        elif arr[mid] < target: left = mid + 1\n"
+                "        else: right = mid - 1\n"
+                "    return -1"
+            ),
+            "golden_code": (
+                "def target_func(arr: list[int], target: int) -> int:\n"
+                "    left, right = 0, len(arr) - 1\n"
+                "    while left <= right:\n"
+                "        mid = (left + right) // 2\n"
+                "        if arr[mid] == target: return mid\n"
+                "        elif arr[mid] < target: left = mid + 1\n"
+                "        else: right = mid - 1\n"
+                "    return -1"
+            ),
+            "counter_example": "assert target_func([1, 3, 5], 5) == 2"
+        },
+        {
+            "id": "bs_insert_position",
+            "spec": "Given a sorted array `nums` and `target`, return index if found, else index where it would be inserted in order.",
+            "buggy_code": (
+                "def target_func(nums: list[int], target: int) -> int:\n"
+                "    left, right = 0, len(nums) - 1\n"
+                "    while left <= right:\n"
+                "        mid = (left + right) // 2\n"
+                "        if nums[mid] == target: return mid\n"
+                "        elif nums[mid] < target: left = mid + 1\n"
+                "        else: right = mid - 1\n"
+                "    return mid"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], target: int) -> int:\n"
+                "    left, right = 0, len(nums) - 1\n"
+                "    while left <= right:\n"
+                "        mid = (left + right) // 2\n"
+                "        if nums[mid] == target: return mid\n"
+                "        elif nums[mid] < target: left = mid + 1\n"
+                "        else: right = mid - 1\n"
+                "    return left"
+            ),
+            "counter_example": "assert target_func([1, 3, 5, 6], 2) == 1"
+        },
+        {
+            "id": "bs_sqrt_floor",
+            "spec": "Given non-negative integer x, return integer square root (floor). For x=0 return 0.",
+            "buggy_code": (
+                "def target_func(x: int) -> int:\n"
+                "    if x <= 1: return x\n"
+                "    l, r, ans = 1, x, 0\n"
+                "    while l <= r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m * m < x:\n"
+                "            ans = m\n"
+                "            l = m + 1\n"
+                "        else:\n"
+                "            r = m - 1\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(x: int) -> int:\n"
+                "    if x <= 1: return x\n"
+                "    l, r, ans = 1, x, 0\n"
+                "    while l <= r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m * m <= x:\n"
+                "            ans = m\n"
+                "            l = m + 1\n"
+                "        else:\n"
+                "            r = m - 1\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func(4) == 2"
+        },
+        {
+            "id": "bs_peak_element",
+            "spec": "An element is peak if strictly greater than neighbors. Return index of any peak in `nums`. Length 1 returns 0. Adjacent elements are distinct.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    if nums[0] > nums[1]: return 0\n"
+                "    for i in range(1, len(nums) - 1):\n"
+                "        if nums[i] > nums[i-1] and nums[i] > nums[i+1]: return i\n"
+                "    return len(nums) - 1"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    if len(nums) == 1: return 0\n"
+                "    if nums[0] > nums[1]: return 0\n"
+                "    for i in range(1, len(nums) - 1):\n"
+                "        if nums[i] > nums[i-1] and nums[i] > nums[i+1]: return i\n"
+                "    return len(nums) - 1"
+            ),
+            "counter_example": "assert target_func([5]) == 0"
+        },
+        {
+            "id": "bs_search_range",
+            "spec": "Given sorted array `nums` and `target`, return [start, end] positions of target. If not found, return [-1, -1].",
+            "buggy_code": (
+                "def target_func(nums: list[int], target: int) -> list[int]:\n"
+                "    if not nums: return [-1, -1]\n"
+                "    first, last = -1, -1\n"
+                "    for i, x in enumerate(nums):\n"
+                "        if x == target:\n"
+                "            if first == -1: first = i\n"
+                "        elif first != -1:\n"
+                "            last = i - 1\n"
+                "            break\n"
+                "    return [first, last]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], target: int) -> list[int]:\n"
+                "    if not nums: return [-1, -1]\n"
+                "    first, last = -1, -1\n"
+                "    for i, x in enumerate(nums):\n"
+                "        if x == target:\n"
+                "            if first == -1: first = i\n"
+                "            last = i\n"
+                "    return [first, last]"
+            ),
+            "counter_example": "assert target_func([5, 7, 8], 8) == [2, 2]"
+        },
+        {
+            "id": "bs_find_min_rotated",
+            "spec": "Given a sorted rotated array of unique elements `nums`, return minimum element. Might not be rotated.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, r = 0, len(nums) - 1\n"
+                "    if nums[l] < nums[r]: return nums[r]\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if nums[m] > nums[r]: l = m + 1\n"
+                "        else: r = m\n"
+                "    return nums[l]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, r = 0, len(nums) - 1\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if nums[m] > nums[r]: l = m + 1\n"
+                "        else: r = m\n"
+                "    return nums[l]"
+            ),
+            "counter_example": "assert target_func([1, 2, 3]) == 1"
+        },
+        {
+            "id": "bs_first_bad_version",
+            "spec": "Given n versions [1..n] and a bad version b, return the first bad version. is_bad(v, b) returns True if v >= b.",
+            "buggy_code": (
+                "def target_func(n: int, b: int) -> int:\n"
+                "    l, r = 1, n\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m >= b: r = m - 1\n"
+                "        else: l = m + 1\n"
+                "    return l"
+            ),
+            "golden_code": (
+                "def target_func(n: int, b: int) -> int:\n"
+                "    l, r = 1, n\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m >= b: r = m\n"
+                "        else: l = m + 1\n"
+                "    return l"
+            ),
+            "counter_example": "assert target_func(3, 2) == 2"
+        },
+        {
+            "id": "bs_search_matrix_flattened",
+            "spec": "Given m x n sorted matrix and target, return True if target is present, False otherwise. Empty matrix returns False.",
+            "buggy_code": (
+                "def target_func(matrix: list[list[int]], target: int) -> bool:\n"
+                "    if not matrix or not matrix[0]: return False\n"
+                "    m, n = len(matrix), len(matrix[0])\n"
+                "    l, r = 0, m * n - 1\n"
+                "    while l <= r:\n"
+                "        mid = (l + r) // 2\n"
+                "        val = matrix[mid // m][mid % m]\n"
+                "        if val == target: return True\n"
+                "        elif val < target: l = mid + 1\n"
+                "        else: r = mid - 1\n"
+                "    return False"
+            ),
+            "golden_code": (
+                "def target_func(matrix: list[list[int]], target: int) -> bool:\n"
+                "    if not matrix or not matrix[0]: return False\n"
+                "    m, n = len(matrix), len(matrix[0])\n"
+                "    l, r = 0, m * n - 1\n"
+                "    while l <= r:\n"
+                "        mid = (l + r) // 2\n"
+                "        val = matrix[mid // n][mid % n]\n"
+                "        if val == target: return True\n"
+                "        elif val < target: l = mid + 1\n"
+                "        else: r = mid - 1\n"
+                "    return False"
+            ),
+            "counter_example": "assert target_func([[1, 3, 5, 7], [10, 11, 16, 20]], 16) == True"
+        },
+        {
+            "id": "bs_guess_number_higher_lower",
+            "spec": "Given n and pick (1 <= pick <= n), return pick using binary search. If guess < pick return 1, guess > pick return -1, equal return 0.",
+            "buggy_code": (
+                "def target_func(n: int, pick: int) -> int:\n"
+                "    l, r = 1, n\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m == pick: return m\n"
+                "        elif m < pick: l = m + 1\n"
+                "        else: r = m - 1\n"
+                "    return -1"
+            ),
+            "golden_code": (
+                "def target_func(n: int, pick: int) -> int:\n"
+                "    l, r = 1, n\n"
+                "    while l <= r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m == pick: return m\n"
+                "        elif m < pick: l = m + 1\n"
+                "        else: r = m - 1\n"
+                "    return -1"
+            ),
+            "counter_example": "assert target_func(1, 1) == 1"
+        },
+        {
+            "id": "bs_single_non_duplicate",
+            "spec": "Given sorted array where every element appears twice except one, return the single element.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, r = 0, len(nums) - 1\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if nums[m] == nums[m + 1]: l = m + 2\n"
+                "        else: r = m\n"
+                "    return nums[l]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, r = 0, len(nums) - 1\n"
+                "    while l < r:\n"
+                "        m = (l + r) // 2\n"
+                "        if m % 2 == 1: m -= 1\n"
+                "        if nums[m] == nums[m + 1]: l = m + 2\n"
+                "        else: r = m\n"
+                "    return nums[l]"
+            ),
+            "counter_example": "assert target_func([3, 3, 7, 7, 10, 11, 11]) == 10"
+        }
+    ]
+
+    # =========================================================================
+    # 2. two_pointers (双指针与前后夹逼) - 10 题
+    # =========================================================================
+    categories["two_pointers"] = [
+        {
+            "id": "two_sum_unique_pair",
+            "spec": "Given array of integers `nums` with exactly one valid pair and `target`, return sorted 0-based indices [i, j] with i < j where nums[i] + nums[j] == target. Cannot reuse same element.",
+            "precondition": "def validate(nums, target):\n    return isinstance(nums, list) and sum(1 for i in range(len(nums)) for j in range(i+1, len(nums)) if nums[i] + nums[j] == target) == 1",
+            "buggy_code": (
+                "def target_func(nums: list[int], target: int) -> list[int]:\n"
+                "    lookup = {num: i for i, num in enumerate(nums)}\n"
+                "    for i, num in enumerate(nums):\n"
+                "        diff = target - num\n"
+                "        if diff in lookup:\n"
+                "            return sorted([i, lookup[diff]])\n"
+                "    return []"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], target: int) -> list[int]:\n"
+                "    lookup = {}\n"
+                "    for i, num in enumerate(nums):\n"
+                "        diff = target - num\n"
+                "        if diff in lookup:\n"
+                "            return sorted([lookup[diff], i])\n"
+                "        lookup[num] = i\n"
+                "    return []"
+            ),
+            "counter_example": "assert target_func([3, 2, 4], 6) == [1, 2]"
+        },
+        {
+            "id": "two_pointers_remove_duplicates_length",
+            "spec": "Given sorted integer array `nums`, remove duplicates in-place so unique elements appear once. Return number of unique elements. Empty returns 0.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    slow = 0\n"
+                "    for fast in range(1, len(nums)):\n"
+                "        if nums[fast] != nums[slow]:\n"
+                "            slow += 1\n"
+                "            nums[slow] = nums[fast]\n"
+                "    return slow + 1"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    if not nums: return 0\n"
+                "    slow = 0\n"
+                "    for fast in range(1, len(nums)):\n"
+                "        if nums[fast] != nums[slow]:\n"
+                "            slow += 1\n"
+                "            nums[slow] = nums[fast]\n"
+                "    return slow + 1"
+            ),
+            "counter_example": "assert target_func([]) == 0"
+        },
+        {
+            "id": "two_pointers_move_zeroes",
+            "spec": "Given array `nums`, move all 0's to end while maintaining relative order of non-zero elements. Return modified list.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    l, r = 0, len(nums) - 1\n"
+                "    while l < r:\n"
+                "        if nums[l] == 0:\n"
+                "            nums[l], nums[r] = nums[r], nums[l]\n"
+                "            r -= 1\n"
+                "        else:\n"
+                "            l += 1\n"
+                "    return nums"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    non_zeros = [x for x in nums if x != 0]\n"
+                "    return non_zeros + [0] * (len(nums) - len(non_zeros))"
+            ),
+            "counter_example": "assert target_func([0, 1, 0, 3, 12]) == [1, 3, 12, 0, 0]"
+        },
+        {
+            "id": "two_pointers_container_water",
+            "spec": "Given array `height`, find two lines forming container with max water volume.",
+            "buggy_code": (
+                "def target_func(height: list[int]) -> int:\n"
+                "    l, r, ans = 0, len(height) - 1, 0\n"
+                "    while l < r:\n"
+                "        ans = max(ans, max(height[l], height[r]) * (r - l))\n"
+                "        if height[l] < height[r]: l += 1\n"
+                "        else: r -= 1\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(height: list[int]) -> int:\n"
+                "    l, r, ans = 0, len(height) - 1, 0\n"
+                "    while l < r:\n"
+                "        ans = max(ans, min(height[l], height[r]) * (r - l))\n"
+                "        if height[l] < height[r]: l += 1\n"
+                "        else: r -= 1\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 8, 6, 2, 5, 4, 8, 3, 7]) == 49"
+        },
+        {
+            "id": "two_pointers_three_sum",
+            "spec": "Return all unique triplets [a, b, c] summing to 0 from `nums` without duplicates, sorted.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[list[int]]:\n"
+                "    nums.sort()\n"
+                "    res = []\n"
+                "    for i in range(len(nums) - 2):\n"
+                "        if i > 0 and nums[i] == nums[i-1]: continue\n"
+                "        l, r = i + 1, len(nums) - 1\n"
+                "        while l < r:\n"
+                "            s = nums[i] + nums[l] + nums[r]\n"
+                "            if s == 0:\n"
+                "                res.append([nums[i], nums[l], nums[r]])\n"
+                "                l += 1\n"
+                "            elif s < 0: l += 1\n"
+                "            else: r -= 1\n"
+                "    return sorted(res)"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[list[int]]:\n"
+                "    nums.sort()\n"
+                "    res = set()\n"
+                "    for i in range(len(nums) - 2):\n"
+                "        l, r = i + 1, len(nums) - 1\n"
+                "        while l < r:\n"
+                "            s = nums[i] + nums[l] + nums[r]\n"
+                "            if s == 0:\n"
+                "                res.add((nums[i], nums[l], nums[r]))\n"
+                "                l += 1\n"
+                "                r -= 1\n"
+                "            elif s < 0: l += 1\n"
+                "            else: r -= 1\n"
+                "    return sorted([list(t) for t in res])"
+            ),
+            "counter_example": "assert target_func([-2, 0, 0, 2, 2]) == [[-2, 0, 2]]"
+        },
+        {
+            "id": "two_pointers_reverse_vowels",
+            "spec": "Reverse only vowels in string `s`. Vowels are 'a','e','i','o','u' in both lowercase AND uppercase.",
+            "buggy_code": (
+                "def target_func(s: str) -> str:\n"
+                "    vowels = set('aeiou')\n"
+                "    chars = list(s)\n"
+                "    i, j = 0, len(s) - 1\n"
+                "    while i < j:\n"
+                "        if chars[i] not in vowels: i += 1\n"
+                "        elif chars[j] not in vowels: j -= 1\n"
+                "        else:\n"
+                "            chars[i], chars[j] = chars[j], chars[i]\n"
+                "            i += 1\n"
+                "            j -= 1\n"
+                "    return ''.join(chars)"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> str:\n"
+                "    vowels = set('aeiouAEIOU')\n"
+                "    chars = list(s)\n"
+                "    i, j = 0, len(s) - 1\n"
+                "    while i < j:\n"
+                "        if chars[i] not in vowels: i += 1\n"
+                "        elif chars[j] not in vowels: j -= 1\n"
+                "        else:\n"
+                "            chars[i], chars[j] = chars[j], chars[i]\n"
+                "            i += 1\n"
+                "            j -= 1\n"
+                "    return ''.join(chars)"
+            ),
+            "counter_example": "assert target_func('Apple') == 'epplA'"
+        },
+        {
+            "id": "two_pointers_valid_palindrome_ii",
+            "spec": "Given string `s`, return True if it can be palindrome after deleting AT MOST ONE character.",
+            "buggy_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    l, r = 0, len(s) - 1\n"
+                "    while l < r:\n"
+                "        if s[l] != s[r]:\n"
+                "            s1 = s[l+1:r]\n"
+                "            return s1 == s1[::-1]\n"
+                "        l += 1\n"
+                "        r -= 1\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    l, r = 0, len(s) - 1\n"
+                "    while l < r:\n"
+                "        if s[l] != s[r]:\n"
+                "            s1 = s[l+1:r+1]\n"
+                "            s2 = s[l:r]\n"
+                "            return s1 == s1[::-1] or s2 == s2[::-1]\n"
+                "        l += 1\n"
+                "        r -= 1\n"
+                "    return True"
+            ),
+            "counter_example": "assert target_func('eeded') == False"
+        },
+        {
+            "id": "two_pointers_sort_colors",
+            "spec": "Sort array `nums` with objects colored red(0), white(1), or blue(2) in-place so adjacent items have same color.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    l, curr, r = 0, 0, len(nums) - 1\n"
+                "    while curr <= r:\n"
+                "        if nums[curr] == 0:\n"
+                "            nums[l], nums[curr] = nums[curr], nums[l]\n"
+                "            l += 1\n"
+                "            curr += 1\n"
+                "        elif nums[curr] == 2:\n"
+                "            nums[curr], nums[r] = nums[r], nums[curr]\n"
+                "            r -= 1\n"
+                "            curr += 1\n"
+                "        else:\n"
+                "            curr += 1\n"
+                "    return nums"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    l, curr, r = 0, 0, len(nums) - 1\n"
+                "    while curr <= r:\n"
+                "        if nums[curr] == 0:\n"
+                "            nums[l], nums[curr] = nums[curr], nums[l]\n"
+                "            l += 1\n"
+                "            curr += 1\n"
+                "        elif nums[curr] == 2:\n"
+                "            nums[curr], nums[r] = nums[r], nums[curr]\n"
+                "            r -= 1\n"
+                "        else:\n"
+                "            curr += 1\n"
+                "    return nums"
+            ),
+            "counter_example": "assert target_func([0, 1, 2, 0]) == [0, 0, 1, 2]"
+        },
+        {
+            "id": "two_pointers_backspace_compare",
+            "spec": "Given strings s and t, return True if they are equal when both are typed into text editors ('#' is backspace).",
+            "buggy_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    def build(st):\n"
+                "        res = []\n"
+                "        for c in st:\n"
+                "            if c == '#' and res: res.pop()\n"
+                "            else: res.append(c)\n"
+                "        return ''.join(res)\n"
+                "    return build(s) == build(t)"
+            ),
+            "golden_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    def build(st):\n"
+                "        res = []\n"
+                "        for c in st:\n"
+                "            if c == '#':\n"
+                "                if res: res.pop()\n"
+                "            else:\n"
+                "                res.append(c)\n"
+                "        return ''.join(res)\n"
+                "    return build(s) == build(t)"
+            ),
+            "counter_example": "assert target_func('#a', 'a') == True"
+        },
+        {
+            "id": "two_pointers_remove_element",
+            "spec": "Given integer array `nums` and integer `val`, remove all occurrences of val in-place and return the new length.",
+            "buggy_code": (
+                "def target_func(nums: list[int], val: int) -> int:\n"
+                "    i = 0\n"
+                "    for j in range(len(nums)):\n"
+                "        if nums[j] == val:\n"
+                "            nums[i] = nums[j]\n"
+                "            i += 1\n"
+                "    return i"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], val: int) -> int:\n"
+                "    i = 0\n"
+                "    for j in range(len(nums)):\n"
+                "        if nums[j] != val:\n"
+                "            nums[i] = nums[j]\n"
+                "            i += 1\n"
+                "    return i"
+            ),
+            "counter_example": "assert target_func([3, 3, 3], 3) == 0"
+        }
+    ]
+
+    # =========================================================================
+    # 3. sliding_window (定长与变长滑动窗口) - 10 题
+    # =========================================================================
+    categories["sliding_window"] = [
+        {
+            "id": "sw_longest_non_repeating",
+            "spec": "Given string `s`, find length of longest substring without duplicate characters.",
+            "buggy_code": (
+                "def target_func(s: str) -> int:\n"
+                "    used = {}\n"
+                "    start = 0\n"
+                "    max_len = 0\n"
+                "    for i, c in enumerate(s):\n"
+                "        if c in used:\n"
+                "            start = used[c] + 1\n"
+                "        used[c] = i\n"
+                "        max_len = max(max_len, i - start + 1)\n"
+                "    return max_len"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> int:\n"
+                "    used = {}\n"
+                "    start = 0\n"
+                "    max_len = 0\n"
+                "    for i, c in enumerate(s):\n"
+                "        if c in used and used[c] >= start:\n"
+                "            start = used[c] + 1\n"
+                "        used[c] = i\n"
+                "        max_len = max(max_len, i - start + 1)\n"
+                "    return max_len"
+            ),
+            "counter_example": "assert target_func('abba') == 2"
+        },
+        {
+            "id": "sw_min_size_subarray_sum",
+            "spec": "Given array of positive integers and target, return minimal length of subarray where sum >= target. If none, return 0.",
+            "buggy_code": (
+                "def target_func(target: int, nums: list[int]) -> int:\n"
+                "    l, cur, ans = 0, 0, len(nums) + 1\n"
+                "    for r in range(len(nums)):\n"
+                "        cur += nums[r]\n"
+                "        while cur >= target:\n"
+                "            ans = min(ans, r - l + 1)\n"
+                "            cur -= nums[l]\n"
+                "            l += 1\n"
+                "    return ans if ans <= len(nums) else -1"
+            ),
+            "golden_code": (
+                "def target_func(target: int, nums: list[int]) -> int:\n"
+                "    l, cur, ans = 0, 0, len(nums) + 1\n"
+                "    for r in range(len(nums)):\n"
+                "        cur += nums[r]\n"
+                "        while cur >= target:\n"
+                "            ans = min(ans, r - l + 1)\n"
+                "            cur -= nums[l]\n"
+                "            l += 1\n"
+                "    return ans if ans <= len(nums) else 0"
+            ),
+            "counter_example": "assert target_func(11, [1, 1, 1, 1]) == 0"
+        },
+        {
+            "id": "sw_contains_duplicate_ii",
+            "spec": "Given array `nums` and integer `k`, return True if nums[i] == nums[j] and abs(i - j) <= k.",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> bool:\n"
+                "    seen = {}\n"
+                "    for i, x in enumerate(nums):\n"
+                "        if x in seen and i - seen[x] < k: return True\n"
+                "        seen[x] = i\n"
+                "    return False"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> bool:\n"
+                "    seen = {}\n"
+                "    for i, x in enumerate(nums):\n"
+                "        if x in seen and i - seen[x] <= k: return True\n"
+                "        seen[x] = i\n"
+                "    return False"
+            ),
+            "counter_example": "assert target_func([1, 2, 3, 1], 3) == True"
+        },
+        {
+            "id": "sw_max_average_subarray_i",
+            "spec": "Given integer array `nums` and integer `k`, find contiguous subarray of length k with max average value and return its max sum.",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    cur = sum(nums[:k-1])\n"
+                "    max_s = cur\n"
+                "    for i in range(k, len(nums)):\n"
+                "        cur += nums[i] - nums[i - k]\n"
+                "        max_s = max(max_s, cur)\n"
+                "    return max_s"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    cur = sum(nums[:k])\n"
+                "    max_s = cur\n"
+                "    for i in range(k, len(nums)):\n"
+                "        cur += nums[i] - nums[i - k]\n"
+                "        max_s = max(max_s, cur)\n"
+                "    return max_s"
+            ),
+            "counter_example": "assert target_func([1, 12, -5, -6, 50, 3], 4) == 51"
+        },
+        {
+            "id": "sw_subarray_product_less_than_k",
+            "spec": "Given array of positive integers `nums` and integer `k`, return number of contiguous subarrays where product < k.",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    prod, l, ans = 1, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        prod *= nums[r]\n"
+                "        while prod >= k:\n"
+                "            prod //= nums[l]\n"
+                "            l += 1\n"
+                "        ans += r - l + 1\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    if k <= 1: return 0\n"
+                "    prod, l, ans = 1, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        prod *= nums[r]\n"
+                "        while prod >= k:\n"
+                "            prod //= nums[l]\n"
+                "            l += 1\n"
+                "        ans += r - l + 1\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 2, 3], 0) == 0"
+        },
+        {
+            "id": "sw_max_consecutive_ones_iii",
+            "spec": "Given binary array `nums` and integer `k`, return max number of consecutive 1's if you can flip at most k 0's.",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    l, zeros, ans = 0, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        if nums[r] == 0: zeros += 1\n"
+                "        while zeros > k:\n"
+                "            if nums[l] == 0: zeros -= 1\n"
+                "            l += 1\n"
+                "        ans = max(ans, r - l)\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    l, zeros, ans = 0, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        if nums[r] == 0: zeros += 1\n"
+                "        while zeros > k:\n"
+                "            if nums[l] == 0: zeros -= 1\n"
+                "            l += 1\n"
+                "        ans = max(ans, r - l + 1)\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0], 2) == 6"
+        },
+        {
+            "id": "sw_permutation_in_string",
+            "spec": "Given strings s1 and s2, return True if s2 contains a permutation of s1.",
+            "buggy_code": (
+                "def target_func(s1: str, s2: str) -> bool:\n"
+                "    from collections import Counter\n"
+                "    k = len(s1)\n"
+                "    c1 = Counter(s1)\n"
+                "    for i in range(len(s2) - k):\n"
+                "        if Counter(s2[i:i+k]) == c1: return True\n"
+                "    return False"
+            ),
+            "golden_code": (
+                "def target_func(s1: str, s2: str) -> bool:\n"
+                "    from collections import Counter\n"
+                "    k = len(s1)\n"
+                "    c1 = Counter(s1)\n"
+                "    for i in range(len(s2) - k + 1):\n"
+                "        if Counter(s2[i:i+k]) == c1: return True\n"
+                "    return False"
+            ),
+            "counter_example": "assert target_func('ab', 'eidba') == True"
+        },
+        {
+            "id": "sw_find_all_anagrams",
+            "spec": "Given strings s and p, return start indices of all anagrams of p in s, sorted.",
+            "buggy_code": (
+                "def target_func(s: str, p: str) -> list[int]:\n"
+                "    from collections import Counter\n"
+                "    k = len(p)\n"
+                "    cp = Counter(p)\n"
+                "    res = []\n"
+                "    for i in range(len(s) - k):\n"
+                "        if Counter(s[i:i+k]) == cp: res.append(i)\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(s: str, p: str) -> list[int]:\n"
+                "    from collections import Counter\n"
+                "    k = len(p)\n"
+                "    cp = Counter(p)\n"
+                "    res = []\n"
+                "    for i in range(len(s) - k + 1):\n"
+                "        if Counter(s[i:i+k]) == cp: res.append(i)\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func('ab', 'ab') == [0]"
+        },
+        {
+            "id": "sw_longest_subarray_after_deleting_one",
+            "spec": "Given binary array `nums`, delete one element and return length of longest non-empty subarray containing only 1's.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, zeros, ans = 0, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        if nums[r] == 0: zeros += 1\n"
+                "        while zeros > 1:\n"
+                "            if nums[l] == 0: zeros -= 1\n"
+                "            l += 1\n"
+                "        ans = max(ans, r - l + 1)\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    l, zeros, ans = 0, 0, 0\n"
+                "    for r in range(len(nums)):\n"
+                "        if nums[r] == 0: zeros += 1\n"
+                "        while zeros > 1:\n"
+                "            if nums[l] == 0: zeros -= 1\n"
+                "            l += 1\n"
+                "        ans = max(ans, r - l)\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 1, 1]) == 2"
+        },
+        {
+            "id": "sw_num_subarrays_with_sum_k",
+            "spec": "Given binary array `nums` and integer `goal`, return number of non-empty subarrays with sum equal to goal.",
+            "buggy_code": (
+                "def target_func(nums: list[int], goal: int) -> int:\n"
+                "    count = {}\n"
+                "    cur, ans = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        if cur - goal in count: ans += count[cur - goal]\n"
+                "        count[cur] = count.get(cur, 0) + 1\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], goal: int) -> int:\n"
+                "    count = {0: 1}\n"
+                "    cur, ans = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        if cur - goal in count: ans += count[cur - goal]\n"
+                "        count[cur] = count.get(cur, 0) + 1\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 0, 1, 0, 1], 2) == 4"
+        }
+    ]
+
+    # =========================================================================
+    # 4. subarrays_prefix (子数组、前缀和与差分) - 10 题
+    # =========================================================================
+    categories["subarrays_prefix"] = [
+        {
+            "id": "max_subarray_all_negative",
+            "spec": "Find contiguous subarray with largest sum and return its sum. Must work for all-negative arrays.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    max_so_far, cur = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur = max(x, cur + x)\n"
+                "        max_so_far = max(max_so_far, cur)\n"
+                "    return max_so_far"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    max_so_far, cur = nums[0], nums[0]\n"
+                "    for x in nums[1:]:\n"
+                "        cur = max(x, cur + x)\n"
+                "        max_so_far = max(max_so_far, cur)\n"
+                "    return max_so_far"
+            ),
+            "counter_example": "assert target_func([-5, -2, -8]) == -2"
+        },
+        {
+            "id": "subarray_sum_equals_k_zero",
+            "spec": "Return total number of subarrays whose sum equals `k`.",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    prefix = {}\n"
+                "    cur, ans = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        if cur - k in prefix: ans += prefix[cur - k]\n"
+                "        prefix[cur] = prefix.get(cur, 0) + 1\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> int:\n"
+                "    prefix = {0: 1}\n"
+                "    cur, ans = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        if cur - k in prefix: ans += prefix[cur - k]\n"
+                "        prefix[cur] = prefix.get(cur, 0) + 1\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([1, 1, 1], 2) == 2"
+        },
+        {
+            "id": "longest_increasing_contiguous",
+            "spec": "Return length of longest strictly increasing contiguous subarray. Return 0 for empty list.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    cur, ans = 1, 1\n"
+                "    for i in range(1, len(nums)):\n"
+                "        if nums[i] > nums[i - 1]: cur += 1\n"
+                "        else: cur = 1\n"
+                "        ans = max(ans, cur)\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    if not nums: return 0\n"
+                "    cur, ans = 1, 1\n"
+                "    for i in range(1, len(nums)):\n"
+                "        if nums[i] > nums[i - 1]: cur += 1\n"
+                "        else: cur = 1\n"
+                "        ans = max(ans, cur)\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([]) == 0"
+        },
+        {
+            "id": "product_except_self_zeros",
+            "spec": "Return array where output[i] is product of all elements except nums[i]. Works with multiple zeros.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    total_prod = 1\n"
+                "    for x in nums:\n"
+                "        total_prod *= x\n"
+                "    return [total_prod // x for x in nums]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    n = len(nums)\n"
+                "    res = [1] * n\n"
+                "    left = 1\n"
+                "    for i in range(n):\n"
+                "        res[i] = left\n"
+                "        left *= nums[i]\n"
+                "    right = 1\n"
+                "    for i in range(n - 1, -1, -1):\n"
+                "        res[i] *= right\n"
+                "        right *= nums[i]\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([1, 2, 0, 4]) == [0, 0, 8, 0]"
+        },
+        {
+            "id": "prefix_find_pivot_index",
+            "spec": "Return leftmost pivot index where sum of nums strictly to the left equals sum to the right. If none, return -1.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    total = sum(nums)\n"
+                "    left_sum = 0\n"
+                "    for i in range(1, len(nums)):\n"
+                "        left_sum += nums[i - 1]\n"
+                "        if left_sum == total - left_sum - nums[i]: return i\n"
+                "    return -1"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    total = sum(nums)\n"
+                "    left_sum = 0\n"
+                "    for i, x in enumerate(nums):\n"
+                "        if left_sum == total - left_sum - x: return i\n"
+                "        left_sum += x\n"
+                "    return -1"
+            ),
+            "counter_example": "assert target_func([2, 1, -1]) == 0"
+        },
+        {
+            "id": "prefix_running_sum",
+            "spec": "Given array `nums`, return running sum of array as runningSum[i] = sum(nums[0]..nums[i]). Non-mutating.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    res = [nums[0]]\n"
+                "    for i in range(1, len(nums) - 1):\n"
+                "        res.append(res[-1] + nums[i])\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    if not nums: return []\n"
+                "    res = [nums[0]]\n"
+                "    for i in range(1, len(nums)):\n"
+                "        res.append(res[-1] + nums[i])\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([1, 2, 3, 4]) == [1, 3, 6, 10]"
+        },
+        {
+            "id": "prefix_contiguous_array_binary",
+            "spec": "Given binary array `nums`, return max length of contiguous subarray with equal number of 0 and 1.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    seen = {}\n"
+                "    count, max_len = 0, 0\n"
+                "    for i, x in enumerate(nums):\n"
+                "        count += (1 if x == 1 else -1)\n"
+                "        if count in seen: max_len = max(max_len, i - seen[count])\n"
+                "        else: seen[count] = i\n"
+                "    return max_len"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    seen = {0: -1}\n"
+                "    count, max_len = 0, 0\n"
+                "    for i, x in enumerate(nums):\n"
+                "        count += (1 if x == 1 else -1)\n"
+                "        if count in seen: max_len = max(max_len, i - seen[count])\n"
+                "        else: seen[count] = i\n"
+                "    return max_len"
+            ),
+            "counter_example": "assert target_func([0, 1]) == 2"
+        },
+        {
+            "id": "prefix_range_sum_query",
+            "spec": "Given array `nums` and query [left, right], calculate sum of elements between indices left and right inclusive.",
+            "buggy_code": (
+                "def target_func(nums: list[int], left: int, right: int) -> int:\n"
+                "    pref = [0]\n"
+                "    for x in nums: pref.append(pref[-1] + x)\n"
+                "    return pref[right] - pref[left]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], left: int, right: int) -> int:\n"
+                "    pref = [0]\n"
+                "    for x in nums: pref.append(pref[-1] + x)\n"
+                "    return pref[right + 1] - pref[left]"
+            ),
+            "counter_example": "assert target_func([-2, 0, 3, -5, 2, -1], 0, 2) == 1"
+        },
+        {
+            "id": "prefix_max_product_subarray",
+            "spec": "Given integer array `nums`, find contiguous subarray with largest product and return product.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    res = max(nums)\n"
+                "    cur = 1\n"
+                "    for x in nums:\n"
+                "        cur *= x\n"
+                "        res = max(res, cur)\n"
+                "        if cur == 0: cur = 1\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    res = max(nums)\n"
+                "    cur_min, cur_max = 1, 1\n"
+                "    for x in nums:\n"
+                "        if x == 0:\n"
+                "            cur_min, cur_max = 1, 1\n"
+                "            continue\n"
+                "        tmp = cur_max * x\n"
+                "        cur_max = max(x, cur_max * x, cur_min * x)\n"
+                "        cur_min = min(x, tmp, cur_min * x)\n"
+                "        res = max(res, cur_max)\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([-3, 2, 2]) == 4"
+        },
+        {
+            "id": "prefix_min_value_step_sum",
+            "spec": "Given array of integers `nums`, return minimum positive value of startValue such that step-by-step sum is never less than 1.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    min_val, cur = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        min_val = min(min_val, cur)\n"
+                "    return -min_val"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    min_val, cur = 0, 0\n"
+                "    for x in nums:\n"
+                "        cur += x\n"
+                "        min_val = min(min_val, cur)\n"
+                "    return 1 - min_val"
+            ),
+            "counter_example": "assert target_func([-3, 2, -3, 4, 2]) == 5"
+        }
+    ]
+
+    # =========================================================================
+    # 5. intervals_sorting (区间合并、排序与贪心) - 10 题
+    # =========================================================================
+    categories["intervals_sorting"] = [
+        {
+            "id": "intervals_merge_adjacent",
+            "spec": "Merge overlapping intervals. Adjacent intervals like [1, 2] and [2, 3] MUST merge into [1, 3].",
+            "buggy_code": (
+                "def target_func(intervals: list[list[int]]) -> list[list[int]]:\n"
+                "    if not intervals: return []\n"
+                "    intervals.sort(key=lambda x: x[0])\n"
+                "    merged = [intervals[0]]\n"
+                "    for cur in intervals[1:]:\n"
+                "        prev = merged[-1]\n"
+                "        if cur[0] < prev[1]:\n"
+                "            prev[1] = max(prev[1], cur[1])\n"
+                "        else:\n"
+                "            merged.append(cur)\n"
+                "    return merged"
+            ),
+            "golden_code": (
+                "def target_func(intervals: list[list[int]]) -> list[list[int]]:\n"
+                "    if not intervals: return []\n"
+                "    intervals.sort(key=lambda x: x[0])\n"
+                "    merged = [intervals[0]]\n"
+                "    for cur in intervals[1:]:\n"
+                "        prev = merged[-1]\n"
+                "        if cur[0] <= prev[1]:\n"
+                "            prev[1] = max(prev[1], cur[1])\n"
+                "        else:\n"
+                "            merged.append(cur)\n"
+                "    return merged"
+            ),
+            "counter_example": "assert target_func([[1, 4], [4, 5]]) == [[1, 5]]"
+        },
+        {
+            "id": "can_jump_single_zero",
+            "spec": "Return True if you can reach the last index from index 0 in jump game `nums`. False otherwise.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> bool:\n"
+                "    max_reach = 0\n"
+                "    for i in range(len(nums)):\n"
+                "        max_reach = max(max_reach, i + nums[i])\n"
+                "        if max_reach >= len(nums) - 1: return True\n"
+                "    return False"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> bool:\n"
+                "    max_reach = 0\n"
+                "    for i in range(len(nums)):\n"
+                "        if i > max_reach: return False\n"
+                "        max_reach = max(max_reach, i + nums[i])\n"
+                "        if max_reach >= len(nums) - 1: return True\n"
+                "    return False"
+            ),
+            "counter_example": "assert target_func([0, 2, 3]) == False"
+        },
+        {
+            "id": "summary_ranges_single",
+            "spec": "Return smallest sorted ranges covering sorted `nums`. Format single element as 'x' and range as 'a->b'.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[str]:\n"
+                "    if not nums: return []\n"
+                "    res = []\n"
+                "    start = nums[0]\n"
+                "    for i in range(1, len(nums)):\n"
+                "        if nums[i] != nums[i-1] + 1:\n"
+                "            res.append(f'{start}->{nums[i-1]}')\n"
+                "            start = nums[i]\n"
+                "    res.append(f'{start}->{nums[-1]}')\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[str]:\n"
+                "    if not nums: return []\n"
+                "    res = []\n"
+                "    start = nums[0]\n"
+                "    for i in range(1, len(nums)):\n"
+                "        if nums[i] != nums[i-1] + 1:\n"
+                "            res.append(str(start) if start == nums[i-1] else f'{start}->{nums[i-1]}')\n"
+                "            start = nums[i]\n"
+                "    res.append(str(start) if start == nums[-1] else f'{start}->{nums[-1]}')\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([0, 1, 2, 4, 5, 7]) == ['0->2', '4->5', '7']"
+        },
+        {
+            "id": "monotonic_array_equality",
+            "spec": "Return True if array is monotonic (monotone increasing or decreasing with equal elements allowed).",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> bool:\n"
+                "    inc = all(nums[i] < nums[i+1] for i in range(len(nums)-1))\n"
+                "    dec = all(nums[i] > nums[i+1] for i in range(len(nums)-1))\n"
+                "    return inc or dec"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> bool:\n"
+                "    inc = all(nums[i] <= nums[i+1] for i in range(len(nums)-1))\n"
+                "    dec = all(nums[i] >= nums[i+1] for i in range(len(nums)-1))\n"
+                "    return inc or dec"
+            ),
+            "counter_example": "assert target_func([1, 1, 1]) == True"
+        },
+        {
+            "id": "intervals_insert_interval",
+            "spec": "Insert `newInterval` into non-overlapping sorted `intervals` and merge overlapping intervals. Return sorted result.",
+            "buggy_code": (
+                "def target_func(intervals: list[list[int]], new_interval: list[int]) -> list[list[int]]:\n"
+                "    res = []\n"
+                "    for interval in intervals:\n"
+                "        if interval[1] < new_interval[0]: res.append(interval)\n"
+                "        elif interval[0] > new_interval[1]:\n"
+                "            res.append(new_interval)\n"
+                "            res.append(interval)\n"
+                "        else:\n"
+                "            new_interval[0] = min(new_interval[0], interval[0])\n"
+                "            new_interval[1] = max(new_interval[1], interval[1])\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(intervals: list[list[int]], new_interval: list[int]) -> list[list[int]]:\n"
+                "    res = []\n"
+                "    i, n = 0, len(intervals)\n"
+                "    while i < n and intervals[i][1] < new_interval[0]:\n"
+                "        res.append(intervals[i])\n"
+                "        i += 1\n"
+                "    while i < n and intervals[i][0] <= new_interval[1]:\n"
+                "        new_interval[0] = min(new_interval[0], intervals[i][0])\n"
+                "        new_interval[1] = max(new_interval[1], intervals[i][1])\n"
+                "        i += 1\n"
+                "    res.append(new_interval)\n"
+                "    while i < n:\n"
+                "        res.append(intervals[i])\n"
+                "        i += 1\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([[1, 5]], [6, 8]) == [[1, 5], [6, 8]]"
+        },
+        {
+            "id": "intervals_non_overlapping",
+            "spec": "Return min number of intervals you need to remove to make remainder non-overlapping.",
+            "buggy_code": (
+                "def target_func(intervals: list[list[int]]) -> int:\n"
+                "    if not intervals: return 0\n"
+                "    intervals.sort(key=lambda x: x[0])\n"
+                "    ans, prev_end = 0, intervals[0][1]\n"
+                "    for start, end in intervals[1:]:\n"
+                "        if start < prev_end:\n"
+                "            ans += 1\n"
+                "        else:\n"
+                "            prev_end = end\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(intervals: list[list[int]]) -> int:\n"
+                "    if not intervals: return 0\n"
+                "    intervals.sort(key=lambda x: x[1])\n"
+                "    ans, prev_end = 0, intervals[0][1]\n"
+                "    for start, end in intervals[1:]:\n"
+                "        if start < prev_end:\n"
+                "            ans += 1\n"
+                "        else:\n"
+                "            prev_end = end\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([[1, 100], [11, 22], [1, 11], [2, 12]]) == 2"
+        },
+        {
+            "id": "greedy_lemonade_change",
+            "spec": "Each customer buys lemonade for $5. Bills are $5, $10, $20. Return True if you can provide correct change to every customer.",
+            "buggy_code": (
+                "def target_func(bills: list[int]) -> bool:\n"
+                "    five, ten = 0, 0\n"
+                "    for bill in bills:\n"
+                "        if bill == 5: five += 1\n"
+                "        elif bill == 10:\n"
+                "            if not five: return False\n"
+                "            five -= 1; ten += 1\n"
+                "        else:\n"
+                "            if five >= 3:\n"
+                "                five -= 3\n"
+                "            elif ten and five:\n"
+                "                ten -= 1; five -= 1\n"
+                "            else:\n"
+                "                return False\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(bills: list[int]) -> bool:\n"
+                "    five, ten = 0, 0\n"
+                "    for bill in bills:\n"
+                "        if bill == 5: five += 1\n"
+                "        elif bill == 10:\n"
+                "            if not five: return False\n"
+                "            five -= 1; ten += 1\n"
+                "        else:\n"
+                "            if ten and five:\n"
+                "                ten -= 1; five -= 1\n"
+                "            elif five >= 3:\n"
+                "                five -= 3\n"
+                "            else:\n"
+                "                return False\n"
+                "    return True"
+            ),
+            "counter_example": "assert target_func([5, 5, 5, 5, 10, 20, 10]) == True"
+        },
+        {
+            "id": "greedy_assign_cookies",
+            "spec": "Given greed factors `g` and cookie sizes `s`, return max number of content children.",
+            "buggy_code": (
+                "def target_func(g: list[int], s: list[int]) -> int:\n"
+                "    g.sort(); s.sort()\n"
+                "    child, cookie = 0, 0\n"
+                "    while child < len(g) and cookie < len(s):\n"
+                "        if s[cookie] > g[child]:\n"
+                "            child += 1\n"
+                "        cookie += 1\n"
+                "    return child"
+            ),
+            "golden_code": (
+                "def target_func(g: list[int], s: list[int]) -> int:\n"
+                "    g.sort(); s.sort()\n"
+                "    child, cookie = 0, 0\n"
+                "    while child < len(g) and cookie < len(s):\n"
+                "        if s[cookie] >= g[child]:\n"
+                "            child += 1\n"
+                "        cookie += 1\n"
+                "    return child"
+            ),
+            "counter_example": "assert target_func([1, 2, 3], [1, 1]) == 1"
+        },
+        {
+            "id": "greedy_largest_number",
+            "spec": "Given list of non-negative integers `nums`, arrange them such that they form the largest number and return as string.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> str:\n"
+                "    from functools import cmp_to_key\n"
+                "    strs = [str(x) for x in nums]\n"
+                "    strs.sort(key=cmp_to_key(lambda a, b: 1 if a + b < b + a else -1))\n"
+                "    return ''.join(strs)"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> str:\n"
+                "    from functools import cmp_to_key\n"
+                "    strs = [str(x) for x in nums]\n"
+                "    strs.sort(key=cmp_to_key(lambda a, b: 1 if a + b < b + a else -1))\n"
+                "    res = ''.join(strs)\n"
+                "    return '0' if res[0] == '0' else res"
+            ),
+            "counter_example": "assert target_func([0, 0]) == '0'"
+        },
+        {
+            "id": "intervals_meeting_rooms",
+            "spec": "Given array of meeting intervals `[[start, end], ...]`, return True if person can attend all meetings (endpoint touch is allowed).",
+            "buggy_code": (
+                "def target_func(intervals: list[list[int]]) -> bool:\n"
+                "    intervals.sort(key=lambda x: x[0])\n"
+                "    for i in range(1, len(intervals)):\n"
+                "        if intervals[i][0] <= intervals[i-1][1]: return False\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(intervals: list[list[int]]) -> bool:\n"
+                "    intervals.sort(key=lambda x: x[0])\n"
+                "    for i in range(1, len(intervals)):\n"
+                "        if intervals[i][0] < intervals[i-1][1]: return False\n"
+                "    return True"
+            ),
+            "counter_example": "assert target_func([[0, 30], [30, 40]]) == True"
+        }
+    ]
+
+    # =========================================================================
+    # 6. strings_parsing (字符串解析、回文与状态机) - 10 题
+    # =========================================================================
+    categories["strings_parsing"] = [
+        {
+            "id": "valid_palindrome_alphanumeric",
+            "spec": "Return True if phrase is palindrome after lowercasing and removing non-alphanumeric characters.",
+            "buggy_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    cleaned = [c for c in s if c.isalnum()]\n"
+                "    return cleaned == cleaned[::-1]"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    cleaned = [c.lower() for c in s if c.isalnum()]\n"
+                "    return cleaned == cleaned[::-1]"
+            ),
+            "counter_example": "assert target_func('A man, a plan, a canal: Panama') == True"
+        },
+        {
+            "id": "length_of_last_word",
+            "spec": "Given string `s` of words and spaces, return length of last word in string.",
+            "buggy_code": (
+                "def target_func(s: str) -> int:\n"
+                "    parts = s.split(' ')\n"
+                "    return len(parts[-1])"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> int:\n"
+                "    parts = s.strip().split()\n"
+                "    return len(parts[-1]) if parts else 0"
+            ),
+            "counter_example": "assert target_func('   fly me   to   the moon  ') == 4"
+        },
+        {
+            "id": "isomorphic_strings",
+            "spec": "Two strings `s` and `t` are isomorphic if characters in s map to t bijectively without collisions.",
+            "buggy_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    if len(s) != len(t): return False\n"
+                "    m = {}\n"
+                "    for c1, c2 in zip(s, t):\n"
+                "        if c1 in m and m[c1] != c2: return False\n"
+                "        m[c1] = c2\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    if len(s) != len(t): return False\n"
+                "    return len(set(zip(s, t))) == len(set(s)) == len(set(t))"
+            ),
+            "counter_example": "assert target_func('badc', 'baba') == False"
+        },
+        {
+            "id": "ransom_note_counts",
+            "spec": "Return True if ransomNote can be constructed using letters from magazine. Letters cannot be reused.",
+            "buggy_code": (
+                "def target_func(ransomNote: str, magazine: str) -> bool:\n"
+                "    return all(c in magazine for c in ransomNote)"
+            ),
+            "golden_code": (
+                "def target_func(ransomNote: str, magazine: str) -> bool:\n"
+                "    from collections import Counter\n"
+                "    c1, c2 = Counter(ransomNote), Counter(magazine)\n"
+                "    return all(c2[k] >= v for k, v in c1.items())"
+            ),
+            "counter_example": "assert target_func('aa', 'ab') == False"
+        },
+        {
+            "id": "word_pattern_bijection",
+            "spec": "Return True if s follows pattern (bijective mapping between letter and non-empty word).",
+            "buggy_code": (
+                "def target_func(pattern: str, s: str) -> bool:\n"
+                "    words = s.split()\n"
+                "    if len(pattern) != len(words): return False\n"
+                "    p_to_w = {}\n"
+                "    for p, w in zip(pattern, words):\n"
+                "        if p in p_to_w and p_to_w[p] != w: return False\n"
+                "        p_to_w[p] = w\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(pattern: str, s: str) -> bool:\n"
+                "    words = s.split()\n"
+                "    if len(pattern) != len(words): return False\n"
+                "    return len(set(zip(pattern, words))) == len(set(pattern)) == len(set(words))"
+            ),
+            "counter_example": "assert target_func('abba', 'dog dog dog dog') == False"
+        },
+        {
+            "id": "group_anagrams_empty",
+            "spec": "Group anagrams together in any order. Return sorted list of lists sorted by key.",
+            "buggy_code": (
+                "def target_func(strs: list[str]) -> list[list[str]]:\n"
+                "    from collections import defaultdict\n"
+                "    groups = defaultdict(list)\n"
+                "    for s in strs:\n"
+                "        if s:\n"
+                "            groups[''.join(sorted(s))].append(s)\n"
+                "    return sorted(list(groups.values()), key=len)"
+            ),
+            "golden_code": (
+                "def target_func(strs: list[str]) -> list[list[str]]:\n"
+                "    from collections import defaultdict\n"
+                "    groups = defaultdict(list)\n"
+                "    for s in strs:\n"
+                "        groups[''.join(sorted(s))].append(s)\n"
+                "    return sorted(list(groups.values()), key=len)"
+            ),
+            "counter_example": "assert target_func(['']) == [['']]"
+        },
+        {
+            "id": "str_str_empty_needle",
+            "spec": "Return index of first occurrence of needle in haystack, or -1 if not part of haystack. If needle empty, return 0.",
+            "buggy_code": (
+                "def target_func(haystack: str, needle: str) -> int:\n"
+                "    if not needle: return -1\n"
+                "    return haystack.find(needle)"
+            ),
+            "golden_code": (
+                "def target_func(haystack: str, needle: str) -> int:\n"
+                "    if not needle: return 0\n"
+                "    return haystack.find(needle)"
+            ),
+            "counter_example": "assert target_func('hello', '') == 0"
+        },
+        {
+            "id": "atoi_clamping",
+            "spec": "Convert string to 32-bit signed integer clamped within [-2**31, 2**31 - 1].",
+            "buggy_code": (
+                "def target_func(s: str) -> int:\n"
+                "    s = s.strip()\n"
+                "    if not s: return 0\n"
+                "    sign = -1 if s[0] == '-' else 1\n"
+                "    if s[0] in ['+', '-']: s = s[1:]\n"
+                "    digits = []\n"
+                "    for c in s:\n"
+                "        if c.isdigit(): digits.append(c)\n"
+                "        else: break\n"
+                "    return sign * int(''.join(digits)) if digits else 0"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> int:\n"
+                "    s = s.strip()\n"
+                "    if not s: return 0\n"
+                "    sign = -1 if s[0] == '-' else 1\n"
+                "    if s[0] in ['+', '-']: s = s[1:]\n"
+                "    digits = []\n"
+                "    for c in s:\n"
+                "        if c.isdigit(): digits.append(c)\n"
+                "        else: break\n"
+                "    val = sign * int(''.join(digits)) if digits else 0\n"
+                "    return max(-2**31, min(2**31 - 1, val))"
+            ),
+            "counter_example": "assert target_func('91283472332') == 2147483647"
+        },
+        {
+            "id": "longest_common_prefix_empty",
+            "spec": "Find longest common prefix string amongst array of strings. If none, return empty string ''.",
+            "buggy_code": (
+                "def target_func(strs: list[str]) -> str:\n"
+                "    prefix = strs[0]\n"
+                "    for s in strs[1:]:\n"
+                "        while not s.startswith(prefix):\n"
+                "            prefix = prefix[:-1]\n"
+                "            if not prefix: return ''\n"
+                "    return prefix"
+            ),
+            "golden_code": (
+                "def target_func(strs: list[str]) -> str:\n"
+                "    if not strs: return ''\n"
+                "    prefix = strs[0]\n"
+                "    for s in strs[1:]:\n"
+                "        while not s.startswith(prefix):\n"
+                "            prefix = prefix[:-1]\n"
+                "            if not prefix: return ''\n"
+                "    return prefix"
+            ),
+            "counter_example": "assert target_func([]) == ''"
+        },
+        {
+            "id": "is_subsequence_empty",
+            "spec": "Given two strings s and t, return True if s is subsequence of t. Empty string is subsequence of any string.",
+            "buggy_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    if not s: return False\n"
+                "    i, j = 0, 0\n"
+                "    while i < len(s) and j < len(t):\n"
+                "        if s[i] == t[j]: i += 1\n"
+                "        j += 1\n"
+                "    return i == len(s)"
+            ),
+            "golden_code": (
+                "def target_func(s: str, t: str) -> bool:\n"
+                "    if not s: return True\n"
+                "    i, j = 0, 0\n"
+                "    while i < len(s) and j < len(t):\n"
+                "        if s[i] == t[j]: i += 1\n"
+                "        j += 1\n"
+                "    return i == len(s)"
+            ),
+            "counter_example": "assert target_func('', 'abc') == True"
+        }
+    ]
+
+    # =========================================================================
+    # 7. stacks_monotonic (栈、括号与单调栈) - 10 题
+    # =========================================================================
+    categories["stacks_monotonic"] = [
+        {
+            "id": "valid_parentheses_unclosed",
+            "spec": "Given string s containing '()[]{}', determine if input string is valid. Open brackets must be closed in correct order.",
+            "buggy_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    stack = []\n"
+                "    mapping = {')': '(', '}': '{', ']': '['}\n"
+                "    for char in s:\n"
+                "        if char in mapping:\n"
+                "            top = stack.pop() if stack else '#'\n"
+                "            if mapping[char] != top: return False\n"
+                "        else:\n"
+                "            stack.append(char)\n"
+                "    return True"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> bool:\n"
+                "    stack = []\n"
+                "    mapping = {')': '(', '}': '{', ']': '['}\n"
+                "    for char in s:\n"
+                "        if char in mapping:\n"
+                "            top = stack.pop() if stack else '#'\n"
+                "            if mapping[char] != top: return False\n"
+                "        else:\n"
+                "            stack.append(char)\n"
+                "    return len(stack) == 0"
+            ),
+            "counter_example": "assert target_func('(') == False"
+        },
+        {
+            "id": "daily_temperatures_stack",
+            "spec": "Given array of temperatures, return array `answer` where answer[i] is days until warmer temperature. 0 if none warmer.",
+            "buggy_code": (
+                "def target_func(temperatures: list[int]) -> list[int]:\n"
+                "    res = [0] * len(temperatures)\n"
+                "    stack = []\n"
+                "    for i, t in enumerate(temperatures):\n"
+                "        while stack and temperatures[stack[-1]] <= t:\n"
+                "            prev = stack.pop()\n"
+                "            res[prev] = i - prev\n"
+                "        stack.append(i)\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(temperatures: list[int]) -> list[int]:\n"
+                "    res = [0] * len(temperatures)\n"
+                "    stack = []\n"
+                "    for i, t in enumerate(temperatures):\n"
+                "        while stack and temperatures[stack[-1]] < t:\n"
+                "            prev = stack.pop()\n"
+                "            res[prev] = i - prev\n"
+                "        stack.append(i)\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([30, 30, 30]) == [0, 0, 0]"
+        },
+        {
+            "id": "eval_rpn_negative_division",
+            "spec": "Evaluate Reverse Polish Notation arithmetic expression (+, -, *, /). Division between two integers truncates toward zero.",
+            "buggy_code": (
+                "def target_func(tokens: list[str]) -> int:\n"
+                "    stack = []\n"
+                "    for t in tokens:\n"
+                "        if t in ['+', '-', '*', '/']:\n"
+                "            b, a = stack.pop(), stack.pop()\n"
+                "            if t == '+': stack.append(a + b)\n"
+                "            elif t == '-': stack.append(a - b)\n"
+                "            elif t == '*': stack.append(a * b)\n"
+                "            elif t == '/': stack.append(a // b)\n"
+                "        else:\n"
+                "            stack.append(int(t))\n"
+                "    return stack[0]"
+            ),
+            "golden_code": (
+                "def target_func(tokens: list[str]) -> int:\n"
+                "    stack = []\n"
+                "    for t in tokens:\n"
+                "        if t in ['+', '-', '*', '/']:\n"
+                "            b, a = stack.pop(), stack.pop()\n"
+                "            if t == '+': stack.append(a + b)\n"
+                "            elif t == '-': stack.append(a - b)\n"
+                "            elif t == '*': stack.append(a * b)\n"
+                "            elif t == '/': stack.append(int(a / b))\n"
+                "        else:\n"
+                "            stack.append(int(t))\n"
+                "    return stack[0]"
+            ),
+            "counter_example": "assert target_func(['4', '-3', '/']) == -1"
+        },
+        {
+            "id": "stack_min_stack_operations",
+            "spec": "Execute a sequence of push(val), pop(), and get_min() operations on a stack and return the result of all get_min() calls.",
+            "buggy_code": (
+                "def target_func(ops: list[tuple[str, int | None]]) -> list[int]:\n"
+                "    stack, min_stack, res = [], [], []\n"
+                "    for op, val in ops:\n"
+                "        if op == 'push':\n"
+                "            stack.append(val)\n"
+                "            if not min_stack or val < min_stack[-1]: min_stack.append(val)\n"
+                "        elif op == 'pop':\n"
+                "            v = stack.pop()\n"
+                "            if v == min_stack[-1]: min_stack.pop()\n"
+                "        elif op == 'get_min':\n"
+                "            res.append(min_stack[-1])\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(ops: list[tuple[str, int | None]]) -> list[int]:\n"
+                "    stack, min_stack, res = [], [], []\n"
+                "    for op, val in ops:\n"
+                "        if op == 'push':\n"
+                "            stack.append(val)\n"
+                "            if not min_stack or val <= min_stack[-1]: min_stack.append(val)\n"
+                "        elif op == 'pop':\n"
+                "            v = stack.pop()\n"
+                "            if v == min_stack[-1]: min_stack.pop()\n"
+                "        elif op == 'get_min':\n"
+                "            res.append(min_stack[-1])\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([('push', 2), ('push', 0), ('push', 3), ('push', 0), ('pop', None), ('get_min', None)]) == [0]"
+        },
+        {
+            "id": "stack_simplify_path",
+            "spec": "Given absolute Unix path string, simplify it to canonical path.",
+            "buggy_code": (
+                "def target_func(path: str) -> str:\n"
+                "    stack = []\n"
+                "    for part in path.split('/'):\n"
+                "        if part == '..': stack.pop()\n"
+                "        elif part and part != '.': stack.append(part)\n"
+                "    return '/' + '/'.join(stack)"
+            ),
+            "golden_code": (
+                "def target_func(path: str) -> str:\n"
+                "    stack = []\n"
+                "    for part in path.split('/'):\n"
+                "        if part == '..':\n"
+                "            if stack: stack.pop()\n"
+                "        elif part and part != '.': stack.append(part)\n"
+                "    return '/' + '/'.join(stack)"
+            ),
+            "counter_example": "assert target_func('/../') == '/'"
+        },
+        {
+            "id": "stack_asteroid_collision",
+            "spec": "Given array of asteroids, positive means right, negative means left. Collide when opposite, smaller explodes. Return state of asteroids.",
+            "buggy_code": (
+                "def target_func(asteroids: list[int]) -> list[int]:\n"
+                "    stack = []\n"
+                "    for ast in asteroids:\n"
+                "        alive = True\n"
+                "        while alive and ast < 0 and stack and stack[-1] > 0:\n"
+                "            if stack[-1] < -ast:\n"
+                "                stack.pop()\n"
+                "            else:\n"
+                "                alive = False\n"
+                "        if alive:\n"
+                "            stack.append(ast)\n"
+                "    return stack"
+            ),
+            "golden_code": (
+                "def target_func(asteroids: list[int]) -> list[int]:\n"
+                "    stack = []\n"
+                "    for ast in asteroids:\n"
+                "        alive = True\n"
+                "        while alive and ast < 0 and stack and stack[-1] > 0:\n"
+                "            if stack[-1] < -ast:\n"
+                "                stack.pop()\n"
+                "            elif stack[-1] == -ast:\n"
+                "                stack.pop()\n"
+                "                alive = False\n"
+                "            else:\n"
+                "                alive = False\n"
+                "        if alive:\n"
+                "            stack.append(ast)\n"
+                "    return stack"
+            ),
+            "counter_example": "assert target_func([8, -8]) == []"
+        },
+        {
+            "id": "stack_make_good_string",
+            "spec": "Given string s of lower/upper letters. Good string has no two adjacent characters where s[i] and s[i+1] are same letter with different cases. Return good string.",
+            "buggy_code": (
+                "def target_func(s: str) -> str:\n"
+                "    stack = []\n"
+                "    for c in s:\n"
+                "        if stack and abs(ord(stack[-1]) - ord(c)) == 32:\n"
+                "            stack.pop()\n"
+                "        stack.append(c)\n"
+                "    return ''.join(stack)"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> str:\n"
+                "    stack = []\n"
+                "    for c in s:\n"
+                "        if stack and abs(ord(stack[-1]) - ord(c)) == 32:\n"
+                "            stack.pop()\n"
+                "        else:\n"
+                "            stack.append(c)\n"
+                "    return ''.join(stack)"
+            ),
+            "counter_example": "assert target_func('aA') == ''"
+        },
+        {
+            "id": "stack_remove_outermost_parentheses",
+            "spec": "A valid parentheses string is decomposed into primitive components. Remove the outermost parentheses of every primitive component and return.",
+            "buggy_code": (
+                "def target_func(s: str) -> str:\n"
+                "    res, opened = [], 0\n"
+                "    for c in s:\n"
+                "        if c == '(':\n"
+                "            res.append(c)\n"
+                "            opened += 1\n"
+                "        else:\n"
+                "            opened -= 1\n"
+                "            res.append(c)\n"
+                "    return ''.join(res)"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> str:\n"
+                "    res, opened = [], 0\n"
+                "    for c in s:\n"
+                "        if c == '(':\n"
+                "            if opened > 0: res.append(c)\n"
+                "            opened += 1\n"
+                "        else:\n"
+                "            opened -= 1\n"
+                "            if opened > 0: res.append(c)\n"
+                "    return ''.join(res)"
+            ),
+            "counter_example": "assert target_func('(()())(())') == '()()()'"
+        },
+        {
+            "id": "stack_final_prices_discount",
+            "spec": "Given array prices, item i gets discount equal to prices[j] where j is minimum index j > i such that prices[j] <= prices[i]. Return final prices.",
+            "buggy_code": (
+                "def target_func(prices: list[int]) -> list[int]:\n"
+                "    res = list(prices)\n"
+                "    stack = []\n"
+                "    for i, p in enumerate(prices):\n"
+                "        while stack and prices[stack[-1]] < p:\n"
+                "            idx = stack.pop()\n"
+                "            res[idx] -= p\n"
+                "        stack.append(i)\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(prices: list[int]) -> list[int]:\n"
+                "    res = list(prices)\n"
+                "    stack = []\n"
+                "    for i, p in enumerate(prices):\n"
+                "        while stack and prices[stack[-1]] >= p:\n"
+                "            idx = stack.pop()\n"
+                "            res[idx] -= p\n"
+                "        stack.append(i)\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([8, 4, 6, 2, 3]) == [4, 2, 4, 2, 3]"
+        },
+        {
+            "id": "stack_backspace_str_len",
+            "spec": "Given string s with backspace '#', process backspaces and return the final remaining string.",
+            "buggy_code": (
+                "def target_func(s: str) -> str:\n"
+                "    stack = []\n"
+                "    for c in s:\n"
+                "        if c == '#' and stack: stack.pop()\n"
+                "        else: stack.append(c)\n"
+                "    return ''.join(stack)"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> str:\n"
+                "    stack = []\n"
+                "    for c in s:\n"
+                "        if c == '#':\n"
+                "            if stack: stack.pop()\n"
+                "        else: stack.append(c)\n"
+                "    return ''.join(stack)"
+            ),
+            "counter_example": "assert target_func('#abc') == 'abc'"
+        }
+    ]
+
+    # =========================================================================
+    # 8. dynamic_programming (线性 DP、背包与网格路径) - 10 题
+    # =========================================================================
+    categories["dynamic_programming"] = [
+        {
+            "id": "climbing_stairs_zero",
+            "spec": "Calculate distinct ways to climb n stairs taking 1 or 2 steps each. For n <= 0 return 0.",
+            "buggy_code": (
+                "def target_func(n: int) -> int:\n"
+                "    if n <= 1: return 1\n"
+                "    a, b = 1, 1\n"
+                "    for _ in range(2, n + 1):\n"
+                "        a, b = b, a + b\n"
+                "    return b"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> int:\n"
+                "    if n <= 0: return 0\n"
+                "    if n == 1: return 1\n"
+                "    a, b = 1, 1\n"
+                "    for _ in range(2, n + 1):\n"
+                "        a, b = b, a + b\n"
+                "    return b"
+            ),
+            "counter_example": "assert target_func(0) == 0"
+        },
+        {
+            "id": "coin_change_unreachable",
+            "spec": "Return fewest number of coins to make amount. If impossible, return -1. For amount 0, return 0.",
+            "buggy_code": (
+                "def target_func(coins: list[int], amount: int) -> int:\n"
+                "    dp = [float('inf')] * (amount + 1)\n"
+                "    dp[0] = 0\n"
+                "    for c in coins:\n"
+                "        for x in range(c, amount + 1):\n"
+                "            dp[x] = min(dp[x], dp[x - c] + 1)\n"
+                "    return dp[amount]"
+            ),
+            "golden_code": (
+                "def target_func(coins: list[int], amount: int) -> int:\n"
+                "    dp = [float('inf')] * (amount + 1)\n"
+                "    dp[0] = 0\n"
+                "    for c in coins:\n"
+                "        for x in range(c, amount + 1):\n"
+                "            dp[x] = min(dp[x], dp[x - c] + 1)\n"
+                "    return int(dp[amount]) if dp[amount] != float('inf') else -1"
+            ),
+            "counter_example": "assert target_func([2], 3) == -1"
+        },
+        {
+            "id": "house_robber_single",
+            "spec": "Maximum money you can rob without alerting police (cannot rob adjacent houses). Return 0 for empty.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    dp = [0] * len(nums)\n"
+                "    dp[0] = nums[0]\n"
+                "    dp[1] = max(nums[0], nums[1])\n"
+                "    for i in range(2, len(nums)):\n"
+                "        dp[i] = max(dp[i-1], dp[i-2] + nums[i])\n"
+                "    return dp[-1]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    if not nums: return 0\n"
+                "    if len(nums) == 1: return nums[0]\n"
+                "    prev2, prev1 = nums[0], max(nums[0], nums[1])\n"
+                "    for i in range(2, len(nums)):\n"
+                "        prev2, prev1 = prev1, max(prev1, prev2 + nums[i])\n"
+                "    return prev1"
+            ),
+            "counter_example": "assert target_func([5]) == 5"
+        },
+        {
+            "id": "unique_paths_single_cell",
+            "spec": "Robot at top-left of m x n grid moves right or down. Return number of unique paths to bottom-right. 1x1 grid returns 1.",
+            "buggy_code": (
+                "def target_func(m: int, n: int) -> int:\n"
+                "    if m == 1 and n == 1: return 0\n"
+                "    import math\n"
+                "    return math.comb(m + n - 2, m - 1)"
+            ),
+            "golden_code": (
+                "def target_func(m: int, n: int) -> int:\n"
+                "    import math\n"
+                "    return math.comb(m + n - 2, m - 1)"
+            ),
+            "counter_example": "assert target_func(1, 1) == 1"
+        },
+        {
+            "id": "min_cost_climbing_stairs",
+            "spec": "Minimum cost to reach top of floor. You can start from index 0 or index 1.",
+            "buggy_code": (
+                "def target_func(cost: list[int]) -> int:\n"
+                "    dp = [0] * (len(cost) + 1)\n"
+                "    dp[0] = cost[0]\n"
+                "    dp[1] = cost[0] + cost[1]\n"
+                "    for i in range(2, len(cost)):\n"
+                "        dp[i] = cost[i] + min(dp[i-1], dp[i-2])\n"
+                "    dp[-1] = min(dp[-2], dp[-3])\n"
+                "    return dp[-1]"
+            ),
+            "golden_code": (
+                "def target_func(cost: list[int]) -> int:\n"
+                "    a, b = 0, 0\n"
+                "    for c in cost:\n"
+                "        a, b = b, c + min(a, b)\n"
+                "    return min(a, b)"
+            ),
+            "counter_example": "assert target_func([10, 15, 20]) == 15"
+        },
+        {
+            "id": "dp_tribonacci_number",
+            "spec": "Return the n-th Tribonacci number: T(0)=0, T(1)=1, T(2)=1, and T(n+3) = T(n) + T(n+1) + T(n+2).",
+            "buggy_code": (
+                "def target_func(n: int) -> int:\n"
+                "    if n == 0: return 0\n"
+                "    if n <= 2: return 1\n"
+                "    a, b, c = 0, 1, 1\n"
+                "    for _ in range(n - 1):\n"
+                "        a, b, c = b, c, a + b + c\n"
+                "    return c"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> int:\n"
+                "    if n == 0: return 0\n"
+                "    if n <= 2: return 1\n"
+                "    a, b, c = 0, 1, 1\n"
+                "    for _ in range(n - 2):\n"
+                "        a, b, c = b, c, a + b + c\n"
+                "    return c"
+            ),
+            "counter_example": "assert target_func(3) == 2"
+        },
+        {
+            "id": "dp_pascals_triangle_row",
+            "spec": "Given integer rowIndex, return the rowIndex-th (0-indexed) row of Pascal's triangle.",
+            "buggy_code": (
+                "def target_func(rowIndex: int) -> list[int]:\n"
+                "    row = [1]\n"
+                "    for _ in range(rowIndex):\n"
+                "        row = [x + y for x, y in zip([0] + row, row + [0])]\n"
+                "    return row[:-1] if rowIndex > 0 else row"
+            ),
+            "golden_code": (
+                "def target_func(rowIndex: int) -> list[int]:\n"
+                "    row = [1]\n"
+                "    for _ in range(rowIndex):\n"
+                "        row = [x + y for x, y in zip([0] + row, row + [0])]\n"
+                "    return row"
+            ),
+            "counter_example": "assert target_func(3) == [1, 3, 3, 1]"
+        },
+        {
+            "id": "dp_divisor_game",
+            "spec": "Alice and Bob take turns choosing x with 0 < x < n and n % x == 0, then replacing n with n - x. Return True if Alice wins assuming both play optimally.",
+            "buggy_code": (
+                "def target_func(n: int) -> bool:\n"
+                "    return n % 2 == 1"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> bool:\n"
+                "    return n % 2 == 0"
+            ),
+            "counter_example": "assert target_func(2) == True"
+        },
+        {
+            "id": "dp_maximum_subarray_len_k",
+            "spec": "Given array of positive integers, return max sum of subarray of size 1. Non-empty array.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    return min(nums)"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    return max(nums)"
+            ),
+            "counter_example": "assert target_func([1, 2, 3]) == 3"
+        },
+        {
+            "id": "dp_count_sorted_vowel_strings",
+            "spec": "Given integer n, return number of strings of length n that consist only of vowels (a, e, i, o, u) and are lexicographically sorted.",
+            "buggy_code": (
+                "def target_func(n: int) -> int:\n"
+                "    import math\n"
+                "    return math.comb(n + 3, 3)"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> int:\n"
+                "    import math\n"
+                "    return math.comb(n + 4, 4)"
+            ),
+            "counter_example": "assert target_func(1) == 5"
+        }
+    ]
+
+    # =========================================================================
+    # 9. math_bitwise (数学运算、位运算与数值溢出) - 10 题
+    # =========================================================================
+    categories["math_bitwise"] = [
+        {
+            "id": "power_of_two_negative",
+            "spec": "Return True if n is power of two, False otherwise. Negative numbers and zero are not power of two.",
+            "buggy_code": (
+                "def target_func(n: int) -> bool:\n"
+                "    return (n & (n - 1)) == 0"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> bool:\n"
+                "    return n > 0 and (n & (n - 1)) == 0"
+            ),
+            "counter_example": "assert target_func(0) == False"
+        },
+        {
+            "id": "palindrome_number_negative",
+            "spec": "Return True if x is a palindrome integer, False otherwise. Negative numbers are not palindromes.",
+            "buggy_code": (
+                "def target_func(x: int) -> bool:\n"
+                "    s = str(abs(x))\n"
+                "    return s == s[::-1]"
+            ),
+            "golden_code": (
+                "def target_func(x: int) -> bool:\n"
+                "    if x < 0: return False\n"
+                "    s = str(x)\n"
+                "    return s == s[::-1]"
+            ),
+            "counter_example": "assert target_func(-121) == False"
+        },
+        {
+            "id": "single_number_find",
+            "spec": "Every element appears twice except for one. Return that single element.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    from collections import Counter\n"
+                "    c = Counter(nums)\n"
+                "    return nums[0]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    res = 0\n"
+                "    for x in nums: res ^= x\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func([1, 1, 2, 2, 4]) == 4"
+        },
+        {
+            "id": "add_binary_carry",
+            "spec": "Given two binary strings `a` and `b`, return their sum as a binary string.",
+            "buggy_code": (
+                "def target_func(a: str, b: str) -> str:\n"
+                "    i, j, carry = len(a) - 1, len(b) - 1, 0\n"
+                "    res = []\n"
+                "    while i >= 0 or j >= 0:\n"
+                "        total = carry\n"
+                "        if i >= 0: total += int(a[i]); i -= 1\n"
+                "        if j >= 0: total += int(b[j]); j -= 1\n"
+                "        res.append(str(total % 2))\n"
+                "        carry = total // 2\n"
+                "    return ''.join(reversed(res))"
+            ),
+            "golden_code": (
+                "def target_func(a: str, b: str) -> str:\n"
+                "    i, j, carry = len(a) - 1, len(b) - 1, 0\n"
+                "    res = []\n"
+                "    while i >= 0 or j >= 0 or carry:\n"
+                "        total = carry\n"
+                "        if i >= 0: total += int(a[i]); i -= 1\n"
+                "        if j >= 0: total += int(b[j]); j -= 1\n"
+                "        res.append(str(total % 2))\n"
+                "        carry = total // 2\n"
+                "    return ''.join(reversed(res))"
+            ),
+            "counter_example": "assert target_func('11', '1') == '100'"
+        },
+        {
+            "id": "reverse_bits_32bit",
+            "spec": "Reverse bits of a given 32-bit unsigned integer `n` and return integer.",
+            "buggy_code": (
+                "def target_func(n: int) -> int:\n"
+                "    res = 0\n"
+                "    while n:\n"
+                "        res = (res << 1) | (n & 1)\n"
+                "        n >>= 1\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> int:\n"
+                "    res = 0\n"
+                "    for _ in range(32):\n"
+                "        res = (res << 1) | (n & 1)\n"
+                "        n >>= 1\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func(1) == 2147483648"
+        },
+        {
+            "id": "missing_number_in_range",
+            "spec": "Given array `nums` containing n distinct numbers in range [0, n], return the only number in range missing from array.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    n = len(nums)\n"
+                "    return sum(range(n)) - sum(nums)"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    n = len(nums)\n"
+                "    return sum(range(n + 1)) - sum(nums)"
+            ),
+            "counter_example": "assert target_func([3, 0, 1]) == 2"
+        },
+        {
+            "id": "plus_one_digits",
+            "spec": "Increment large integer represented as array of digits by one. Return resulting array.",
+            "buggy_code": (
+                "def target_func(digits: list[int]) -> list[int]:\n"
+                "    for i in range(len(digits) - 1, -1, -1):\n"
+                "        if digits[i] < 9:\n"
+                "            digits[i] += 1\n"
+                "            return digits\n"
+                "        digits[i] = 0\n"
+                "    return digits"
+            ),
+            "golden_code": (
+                "def target_func(digits: list[int]) -> list[int]:\n"
+                "    for i in range(len(digits) - 1, -1, -1):\n"
+                "        if digits[i] < 9:\n"
+                "            digits[i] += 1\n"
+                "            return digits\n"
+                "        digits[i] = 0\n"
+                "    return [1] + digits"
+            ),
+            "counter_example": "assert target_func([9, 9]) == [1, 0, 0]"
+        },
+        {
+            "id": "counting_bits_length",
+            "spec": "Given integer n, return array `ans` of length n + 1 where ans[i] is number of 1's in binary representation of i.",
+            "buggy_code": (
+                "def target_func(n: int) -> list[int]:\n"
+                "    return [bin(i).count('1') for i in range(n)]"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> list[int]:\n"
+                "    return [bin(i).count('1') for i in range(n + 1)]"
+            ),
+            "counter_example": "assert target_func(2) == [0, 1, 1]"
+        },
+        {
+            "id": "gcd_both_zero",
+            "spec": "Return greatest common divisor of positive integers a and b. If a or b is 0, return the other. If both are 0, return 0.",
+            "buggy_code": (
+                "def target_func(a: int, b: int) -> int:\n"
+                "    while b != 0:\n"
+                "        a, b = b, a % b\n"
+                "    return a if a != 0 else -1"
+            ),
+            "golden_code": (
+                "def target_func(a: int, b: int) -> int:\n"
+                "    import math\n"
+                "    return math.gcd(a, b)"
+            ),
+            "counter_example": "assert target_func(0, 0) == 0"
+        },
+        {
+            "id": "hamming_distance_bits",
+            "spec": "Return Hamming distance (number of differing bit positions) between two integers x and y.",
+            "buggy_code": (
+                "def target_func(x: int, y: int) -> int:\n"
+                "    return bin(x & y).count('1')"
+            ),
+            "golden_code": (
+                "def target_func(x: int, y: int) -> int:\n"
+                "    return bin(x ^ y).count('1')"
+            ),
+            "counter_example": "assert target_func(1, 4) == 2"
+        }
+    ]
+
+    # =========================================================================
+    # 10. matrices_data_structs (矩阵、哈希表与树/链表基础数据结构) - 10 题
+    # =========================================================================
+    categories["matrices_data_structs"] = [
+        {
+            "id": "first_unique_char",
+            "spec": "Return 0-based index of first non-repeating character in string `s`. If none exists or string empty, return -1.",
+            "buggy_code": (
+                "def target_func(s: str) -> int:\n"
+                "    from collections import Counter\n"
+                "    counts = Counter(s)\n"
+                "    for i, c in enumerate(s):\n"
+                "        if counts[c] == 1: return i\n"
+                "    return 0"
+            ),
+            "golden_code": (
+                "def target_func(s: str) -> int:\n"
+                "    from collections import Counter\n"
+                "    counts = Counter(s)\n"
+                "    for i, c in enumerate(s):\n"
+                "        if counts[c] == 1: return i\n"
+                "    return -1"
+            ),
+            "counter_example": "assert target_func('aabb') == -1"
+        },
+        {
+            "id": "chunk_list_zero",
+            "spec": "Split list `lst` into chunks of given `size`. If size <= 0 or list empty, return [].",
+            "buggy_code": (
+                "def target_func(lst: list, size: int) -> list[list]:\n"
+                "    return [lst[i:i + size] for i in range(0, len(lst), size)]"
+            ),
+            "golden_code": (
+                "def target_func(lst: list, size: int) -> list[list]:\n"
+                "    if size <= 0 or not lst: return []\n"
+                "    return [lst[i:i + size] for i in range(0, len(lst), size)]"
+            ),
+            "counter_example": "assert target_func([1, 2, 3], 0) == []"
+        },
+        {
+            "id": "fizz_buzz_ordering",
+            "spec": "Return list of strings from 1 to n. Multiples of 3 'Fizz', multiples of 5 'Buzz', multiples of both 3 and 5 'FizzBuzz'.",
+            "buggy_code": (
+                "def target_func(n: int) -> list[str]:\n"
+                "    res = []\n"
+                "    for i in range(1, n + 1):\n"
+                "        if i % 3 == 0: res.append('Fizz')\n"
+                "        elif i % 5 == 0: res.append('Buzz')\n"
+                "        elif i % 15 == 0: res.append('FizzBuzz')\n"
+                "        else: res.append(str(i))\n"
+                "    return res"
+            ),
+            "golden_code": (
+                "def target_func(n: int) -> list[str]:\n"
+                "    res = []\n"
+                "    for i in range(1, n + 1):\n"
+                "        if i % 15 == 0: res.append('FizzBuzz')\n"
+                "        elif i % 3 == 0: res.append('Fizz')\n"
+                "        elif i % 5 == 0: res.append('Buzz')\n"
+                "        else: res.append(str(i))\n"
+                "    return res"
+            ),
+            "counter_example": "assert target_func(15) == ['1', '2', 'Fizz', '4', 'Buzz', 'Fizz', '7', '8', 'Fizz', 'Buzz', '11', 'Fizz', '13', '14', 'FizzBuzz']"
+        },
+        {
+            "id": "maximum_product_three",
+            "spec": "Given integer array `nums`, find three numbers whose product is maximum and return product.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    nums.sort()\n"
+                "    return nums[-1] * nums[-2] * nums[-3]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int:\n"
+                "    nums.sort()\n"
+                "    return max(nums[-1] * nums[-2] * nums[-3], nums[0] * nums[1] * nums[-1])"
+            ),
+            "counter_example": "assert target_func([-10, -10, 5, 2]) == 500"
+        },
+        {
+            "id": "majority_element_verify",
+            "spec": "Return majority element (appears strictly more than n // 2 times). If no majority element, return None.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> int | None:\n"
+                "    count, cand = 0, None\n"
+                "    for x in nums:\n"
+                "        if count == 0: cand = x\n"
+                "        count += (1 if x == cand else -1)\n"
+                "    return cand"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> int | None:\n"
+                "    count, cand = 0, None\n"
+                "    for x in nums:\n"
+                "        if count == 0: cand = x\n"
+                "        count += (1 if x == cand else -1)\n"
+                "    if nums.count(cand) > len(nums) // 2: return cand\n"
+                "    return None"
+            ),
+            "counter_example": "assert target_func([1, 2, 3]) == None"
+        },
+        {
+            "id": "find_all_duplicates",
+            "spec": "Given array `nums` where integers are in range [1, n], return sorted array of all integers appearing twice.",
+            "buggy_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    from collections import Counter\n"
+                "    c = Counter(nums)\n"
+                "    return sorted([k for k, v in c.items() if v >= 1])"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int]) -> list[int]:\n"
+                "    from collections import Counter\n"
+                "    c = Counter(nums)\n"
+                "    return sorted([k for k, v in c.items() if v == 2])"
+            ),
+            "counter_example": "assert target_func([4, 3, 2, 7, 8, 2, 3, 1]) == [2, 3]"
+        },
+        {
+            "id": "rotate_array_large",
+            "spec": "Rotate array to right by k steps. k can be greater than len(nums). Empty array returns [].",
+            "buggy_code": (
+                "def target_func(nums: list[int], k: int) -> list[int]:\n"
+                "    if not nums: return []\n"
+                "    return nums[-k:] + nums[:-k]"
+            ),
+            "golden_code": (
+                "def target_func(nums: list[int], k: int) -> list[int]:\n"
+                "    if not nums: return []\n"
+                "    k = k % len(nums)\n"
+                "    if k == 0: return nums[:]\n"
+                "    return nums[-k:] + nums[:-k]"
+            ),
+            "counter_example": "assert target_func([1, 2, 3], 4) == [3, 1, 2]"
+        },
+        {
+            "id": "matrix_transpose",
+            "spec": "Given 2D integer matrix `matrix`, return transpose of matrix (M x N becomes N x M).",
+            "buggy_code": (
+                "def target_func(matrix: list[list[int]]) -> list[list[int]]:\n"
+                "    m = len(matrix)\n"
+                "    return [[matrix[j][i] for j in range(m)] for i in range(m)]"
+            ),
+            "golden_code": (
+                "def target_func(matrix: list[list[int]]) -> list[list[int]]:\n"
+                "    return [list(row) for row in zip(*matrix)]"
+            ),
+            "counter_example": "assert target_func([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]"
+        },
+        {
+            "id": "matrix_set_zeroes",
+            "spec": "Given m x n matrix, if an element is 0, set its entire row and column to 0's. Return modified matrix.",
+            "buggy_code": (
+                "def target_func(matrix: list[list[int]]) -> list[list[int]]:\n"
+                "    m, n = len(matrix), len(matrix[0])\n"
+                "    for i in range(m):\n"
+                "        for j in range(n):\n"
+                "            if matrix[i][j] == 0:\n"
+                "                for c in range(n): matrix[i][c] = 0\n"
+                "                for r in range(m): matrix[r][j] = 0\n"
+                "    return matrix"
+            ),
+            "golden_code": (
+                "def target_func(matrix: list[list[int]]) -> list[list[int]]:\n"
+                "    m, n = len(matrix), len(matrix[0])\n"
+                "    zero_rows = set()\n"
+                "    zero_cols = set()\n"
+                "    for i in range(m):\n"
+                "        for j in range(n):\n"
+                "            if matrix[i][j] == 0:\n"
+                "                zero_rows.add(i)\n"
+                "                zero_cols.add(j)\n"
+                "    for r in zero_rows:\n"
+                "        for c in range(n): matrix[r][c] = 0\n"
+                "    for c in zero_cols:\n"
+                "        for r in range(m): matrix[r][c] = 0\n"
+                "    return matrix"
+            ),
+            "counter_example": "assert target_func([[1, 1, 1], [1, 0, 1], [1, 1, 1]]) == [[1, 0, 1], [0, 0, 0], [1, 0, 1]]"
+        },
+        {
+            "id": "matrix_diagonal_sum",
+            "spec": "Given square matrix, return sum of matrix diagonals (primary and secondary). Elements on both diagonals counted only once.",
+            "buggy_code": (
+                "def target_func(mat: list[list[int]]) -> int:\n"
+                "    n = len(mat)\n"
+                "    ans = 0\n"
+                "    for i in range(n):\n"
+                "        ans += mat[i][i] + mat[i][n - 1 - i]\n"
+                "    return ans"
+            ),
+            "golden_code": (
+                "def target_func(mat: list[list[int]]) -> int:\n"
+                "    n = len(mat)\n"
+                "    ans = 0\n"
+                "    for i in range(n):\n"
+                "        ans += mat[i][i]\n"
+                "        if i != n - 1 - i:\n"
+                "            ans += mat[i][n - 1 - i]\n"
+                "    return ans"
+            ),
+            "counter_example": "assert target_func([[1, 2, 3], [4, 5, 6], [7, 8, 9]]) == 25"
+        }
+    ]
+
+    return categories
+
+
+def main():
+    print("=" * 80)
+    print("🚀 正在构建并全量验证 100 道高质量无泄漏 BugHunter 题库...")
+    print("=" * 80)
+
+    categories = build_raw_categories()
+    total_probs = 0
+    all_cleaned = []
+
+    train_list = []
+    val_list = []
+    test_list = []
+
+    for cat_name, prob_list in categories.items():
+        assert len(prob_list) == 10, f"Category {cat_name} must have exactly 10 problems, got {len(prob_list)}"
+        print(f"\n📂 正在清洗与审计门类: [{cat_name}] ({len(prob_list)} 题)...")
+
+        for idx, prob in enumerate(prob_list):
+            # 1. 彻底剔除所有注释
+            prob["buggy_code"] = clean_code_comments(prob["buggy_code"])
+            prob["golden_code"] = clean_code_comments(prob["golden_code"])
+            prob["category"] = cat_name
+            prob["input_contract"] = prob["id"]
+
+            # 2. 确保代码中绝对没有任何 # BUG
+            assert "# BUG" not in prob["buggy_code"], f"Found # BUG in {prob['id']}"
+            assert "# BUG" not in prob["golden_code"], f"Found # BUG in {prob['id']}"
+
+            # 3. 严格 AST 双向沙盒验证
+            ce = prob["counter_example"]
+            is_valid_ast, ast_msg = validate_and_parse_assertion(ce)
+            assert is_valid_ast, f"AST verification failed on {prob['id']}: {ast_msg}"
+
+            passed = verify_bug_exposure(ce, prob["golden_code"], prob["buggy_code"],
+                                         precondition=prob.get("precondition"), input_contract=prob["input_contract"])
+            assert passed, f"Sandbox verification failed on {prob['id']} with {ce}"
+
+            all_cleaned.append(prob)
+            total_probs += 1
+
+            # 4. 严格三级划分: 前 6 题归 Train, 第 7-8 题归 Val, 第 9-10 题归 Test
+            if idx < 6:
+                train_list.append(prob)
+            elif idx < 8:
+                val_list.append(prob)
+            else:
+                test_list.append(prob)
+
+    assert total_probs == 100, f"Expected 100 problems, got {total_probs}"
+    assert len(train_list) == 60, f"Train must be 60, got {len(train_list)}"
+    assert len(val_list) == 20, f"Val must be 20, got {len(val_list)}"
+    assert len(test_list) == 20, f"Test must be 20, got {len(test_list)}"
+
+    # 验证三级划分完全无交集
+    train_ids = {p["id"] for p in train_list}
+    val_ids = {p["id"] for p in val_list}
+    test_ids = {p["id"] for p in test_list}
+    assert len(train_ids & val_ids) == 0, "Train and Val have overlapping problem IDs!"
+    assert len(train_ids & test_ids) == 0, "Train and Test have overlapping problem IDs!"
+    assert len(val_ids & test_ids) == 0, "Val and Test have overlapping problem IDs!"
+
+    print("\n" + "=" * 80)
+    print(f"🎉 100 道题目全部 100% 通过 AST 语法校验与双向沙盒严格验证！")
+    print(f"   • Train 训练集:      {len(train_list)} 道 (涵盖全部 10 门类，每类 6 题)")
+    print(f"   • Val   验证选模集:  {len(val_list)} 道 (涵盖全部 10 门类，每类 2 题)")
+    print(f"   • Test  终极盲盒测试: {len(test_list)} 道 (涵盖全部 10 门类，每类 2 题，终身隔离)")
+    print("=" * 80)
+
+    # 保存结构化切分数据集
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    os.makedirs(data_dir, exist_ok=True)
+    dataset_path = os.path.join(data_dir, "bug_hunter_dataset.json")
+    split_payload = {
+        "metadata": {
+            "total": 100,
+            "train_size": len(train_list),
+            "val_size": len(val_list),
+            "test_size": len(test_list),
+            "num_categories": 10,
+            "comments_stripped": True,
+            "zero_leakage": True
+        },
+        "train": train_list,
+        "val": val_list,
+        "test": test_list
+    }
+    with open(dataset_path, "w", encoding="utf-8") as f:
+        json.dump(split_payload, f, indent=2, ensure_ascii=False)
+    print(f"\n💾 结构化三级数据集已保存至: {dataset_path}")
+
+    # 同时更新扁平兼容版 bug_hunter_100.json
+    flat_path = os.path.join(data_dir, "bug_hunter_100.json")
+    with open(flat_path, "w", encoding="utf-8") as f:
+        json.dump(all_cleaned, f, indent=2, ensure_ascii=False)
+    print(f"💾 扁平兼容 100 题集已同步保存至: {flat_path}\n")
+
+
+if __name__ == "__main__":
+    main()

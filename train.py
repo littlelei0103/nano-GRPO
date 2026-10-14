@@ -1,196 +1,88 @@
-import os
-import sys
-import json
-import random
+"""
+train.py - 基于在线流式微步探索的可验证奖励强化学习主入口 (Online Streaming GRPO)
+
+使用示例:
+  # 启动 Nano Counterexample 在线流式强化学习训练 (默认任务与模型)
+  python train.py --task counterexample --total_steps 100 --lr 2e-5
+
+  # 启动 BugHunter 代码漏洞反例审计挑战集训练
+  python train.py --task bug_hunter --total_steps 100 --lr 2e-5
+"""
+
+import argparse
 import torch
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model, PeftModel
-from task_countdown import generate_countdown_sample, compute_reward, verify_intermediate_equations
+from trainer.evaluation import evaluate_benchmark
 
 
-# ===================== 超参数配置 =====================
-MODEL_NAME = "Qwen/Qwen3-0.6B-Base"
-GROUP_SIZE = 8                    # 每个 Prompt 采样的候选数 G
-MAX_PROMPT_LEN = 256
-MAX_NEW_TOKENS = 384
-LR = 5e-6
-CLIP_EPS = 0.2
-BETA_KL = 0.01                    # KL 散度惩罚系数
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+def parse_args():
+    parser = argparse.ArgumentParser(description="nano-GRPO: Online Streaming RLVR Training Engine")
 
-# ===================== nano-GRPO 3.0 配置 =====================
-TOTAL_STEPS = 200
-START_STEP = 1
-RESUME_CHECKPOINT = "./checkpoint-best-v2"  # 基于 2.0 黄金最佳权重继续强化，直击痛点
+    # 任务与模型
+    parser.add_argument("--task", type=str, default="counterexample", choices=["counterexample", "bug_hunter", "bug_differential", "code_exec"],
+                        help="选择训练任务: counterexample (差分程序反例挖掘), bug_hunter, bug_differential (输入差分执行), code_exec")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B",
+                        help="基座模型名称或本地权重路径 (默认 Qwen/Qwen2.5-1.5B)")
+    parser.add_argument("--resume_checkpoint", type=str, default="",
+                        help="恢复已有 LoRA 权重的目录路径 (精确续训同一实验)")
+    parser.add_argument("--init_adapter", type=str, default="",
+                        help="初始化已有预训练 LoRA 适配器权重目录 (跨任务迁移学习热启动，开启新实验)")
+    parser.add_argument("--data_path", type=str, default="",
+                        help="自定义题目数据集 JSON 路径 (默认自动加载对应轨道数据集)")
+    parser.add_argument("--save_dir", type=str, default="./checkpoints",
+                        help="检查点保存目录")
+
+    # 强化学习与训练超参数
+    parser.add_argument("--group_size", type=int, default=8,
+                        help="每个 Prompt 采样的候选数量 G (默认 8)")
+    parser.add_argument("--micro_batch_size", type=int, default=8,
+                        help="采样与前向微批次大小，设为 8 实现单次前向极速吞吐 (默认 8)")
+    parser.add_argument("--problems_per_update", type=int, default=1,
+                        help="每次更新覆盖的题目数 (流式训练默认为 1)")
+    parser.add_argument("--lr", type=float, default=2e-5,
+                        help="AdamW 学习率 (默认 2e-5)")
+    parser.add_argument("--kl_coef", type=float, default=0.01,
+                        help="KL 散度惩罚系数 beta (默认 0.01)")
+    parser.add_argument("--clip_eps", type=float, default=0.2,
+                        help="PPO 策略裁剪范围 epsilon (默认 0.2)")
+    parser.add_argument("--max_new_tokens", type=int, default=32,
+                        help="自回归生成的最大 Token 长度 (默认 32)")
+
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="采样温度 (默认 0.7)")
+    parser.add_argument("--top_p", type=float, default=1.0,
+                        help="完整支持集采样，训练要求 top_p=1.0")
+
+    parser.add_argument("--seed", type=int, default=42, help="训练随机种子")
+
+    # 步数与记录控制
+    parser.add_argument("--total_steps", type=int, default=200,
+                        help="总训练步数 (默认 200)")
+    parser.add_argument("--eval_interval", type=int, default=20,
+                        help="诊断切片与检查点保存周期 (默认 20)")
+    parser.add_argument("--skip_baseline", action="store_true",
+                        help="是否跳过初始 Step 0 的零样本基线评测 (用于快速测试)")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="运行设备 (cuda 或 cpu)")
+
+    parser.add_argument("--dynamic_resampling", action="store_true",
+                        help="启用 DAPO 风格动态零方差重采样 (Dynamic Variance Rescue)")
+    parser.add_argument("--max_resample_rounds", type=int, default=2,
+                        help="零方差组最大重采样轮数 (默认 2)")
+    parser.add_argument("--resample_temp_boost", type=float, default=0.0, choices=[0.0],
+                        help="兼容参数，只允许 0.0；重采样强制使用原策略温度")
+
+    return parser.parse_args()
 
 
-def get_per_token_logps(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
-    """从 logits 中提取每个 token 的 log 概率 (Shift 1 位对齐)"""
-    shift_logits = logits[:, :-1, :].contiguous()
-    shift_labels = input_ids[:, 1:].contiguous()
-    log_probs = F.log_softmax(shift_logits, dim=-1)
-    per_token_logps = torch.gather(log_probs, dim=-1, index=shift_labels.unsqueeze(-1)).squeeze(-1)
-    return per_token_logps
+def evaluate_val_benchmark(model, tokenizer, task, max_new_tokens=300, device="cuda"):
+    result = evaluate_benchmark(model, tokenizer, task.get_val_dataset(), task, max_new_tokens, device)
+    return result["problem_pass_rate"] or 0.0, result["solved_problems"], result["total_problems"]
 
 
-def train():
-    print(f"🚀 正在初始化 nano-GRPO 3.0 (Anti-Cheating PRM + 混元课程学习) [设备: {DEVICE}]...", flush=True)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # 1. 加载基座模型
-    base_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True
-    ).to(DEVICE)
-    base_model.config.use_cache = False
-    base_model.gradient_checkpointing_enable()
-
-    # 2. 从 Checkpoint 恢复或初始化 LoRA
-    if RESUME_CHECKPOINT and os.path.exists(RESUME_CHECKPOINT):
-        print(f"🔄 正在从 nano-GRPO 2.0 黄金权重唤醒: {RESUME_CHECKPOINT}", flush=True)
-        model = PeftModel.from_pretrained(base_model, RESUME_CHECKPOINT, is_trainable=True)
-    else:
-        print("🌱 未检测到恢复权重，初始化全新 LoRA 适配器...", flush=True)
-        lora_config = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM"
-        )
-        model = get_peft_model(base_model, lora_config)
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
-    best_reward = -1.0
-
-    print("✨ nano-GRPO 3.0 (Anti-Cheating PRM & Curriculum Mixing) 正式点火！\n", flush=True)
-
-    for step in range(START_STEP, TOTAL_STEPS + 1):
-        # ---------------- 步骤 1: 混元动态课程抽样 (Curriculum Mixing) ----------------
-        # 动态退火比例: 前期 40% 3数稳固正反馈梯队，后期递减至 20%，始终保持成功信号活跃
-        p_3num = max(0.20, 0.40 - 0.20 * (step / TOTAL_STEPS))
-        if random.random() < p_3num:
-            stage_name = "Mix (3 Nums)"
-            sample = generate_countdown_sample(num_count=3, target_range=(10, 30))
-        else:
-            stage_name = "Mix (4 Nums)"
-            sample = generate_countdown_sample(num_count=4, target_range=(10, 40))
-
-        prompt = sample["prompt"]
-        prompt_inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
-        prompt_len = prompt_inputs["input_ids"].shape[1]
-
-        # 批量扩展采样：复制 G 份 Prompt 批量并发生成 (Group Rollout)
-        expanded_prompt_ids = prompt_inputs["input_ids"].repeat(GROUP_SIZE, 1)
-        expanded_attention_mask = prompt_inputs["attention_mask"].repeat(GROUP_SIZE, 1)
-
-        with torch.inference_mode():
-            outputs = model.generate(
-                input_ids=expanded_prompt_ids,
-                attention_mask=expanded_attention_mask,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=True,
-                temperature=0.9,
-                top_p=0.95,
-                use_cache=False,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-
-        # ---------------- 步骤 2: 规则判卷与组内相对优势计算 (PRM Anti-Cheating) ----------------
-        rewards_list = []
-        solved_count = 0
-        cheating_count = 0
-        for i in range(GROUP_SIZE):
-            generated_text = tokenizer.decode(outputs[i][prompt_len:], skip_special_tokens=True)
-            r = compute_reward(generated_text, sample["numbers"], sample["target"])
-            rewards_list.append(r)
-            if r <= -0.2:
-                cheating_count += 1
-            elif r >= 2.5:  # 算术精确命中
-                solved_count += 1
-
-        rewards = torch.tensor(rewards_list, dtype=torch.float32, device=DEVICE)
-
-        # 组内相对优势标准化 (Group Advantage Normalization)
-        mean_r = rewards.mean()
-        std_r = rewards.std() + 1e-8
-        advantages = (rewards - mean_r) / std_r
-
-        # ---------------- 步骤 3: 计算 Policy 与 Ref 的 Token Log-probs ----------------
-        seq_len = outputs.shape[1]
-        response_mask = torch.zeros((GROUP_SIZE, seq_len - 1), dtype=torch.bool, device=DEVICE)
-        response_mask[:, prompt_len - 1:] = (outputs[:, 1:] != tokenizer.pad_token_id)[:, prompt_len - 1:]
-
-        # A. 策略模型前向传播
-        model.train()
-        logits = model(input_ids=outputs).logits
-        token_logprobs = get_per_token_logps(logits, outputs)
-
-        # B. 参考模型前向传播 (关闭 LoRA，零显存占用)
-        with torch.no_grad():
-            with model.disable_adapter():
-                ref_logits = model(input_ids=outputs).logits
-                ref_token_logprobs = get_per_token_logps(ref_logits, outputs)
-
-        # ---------------- 步骤 4: 计算 GRPO PPO 裁剪损失与 KL 散度 ----------------
-        with torch.no_grad():
-            old_token_logprobs = token_logprobs.detach()
-
-        ratio = torch.exp(token_logprobs - old_token_logprobs)
-        surr1 = ratio * advantages.unsqueeze(-1)
-        surr2 = torch.clamp(ratio, 1.0 - CLIP_EPS, 1.0 + CLIP_EPS) * advantages.unsqueeze(-1)
-        policy_loss = -torch.min(surr1, surr2)
-
-        # DeepSeek-R1 无偏 KL 散度
-        log_ratio = ref_token_logprobs - token_logprobs
-        kl_div = torch.exp(log_ratio) - log_ratio - 1.0
-
-        total_loss = policy_loss + BETA_KL * kl_div
-        loss = (total_loss * response_mask).sum() / (response_mask.sum() + 1e-8)
-
-        # ---------------- 步骤 5: 反向传播与优化 ----------------
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-
-        # ---------------- 步骤 6: 打印心跳与自检 ----------------
-        if step % 5 == 0 or step == 1 or solved_count > 0:
-            best_idx = torch.argmax(rewards).item()
-            best_pred = tokenizer.decode(outputs[best_idx][prompt_len:], skip_special_tokens=True)
-            v_eqs, f_eqs = verify_intermediate_equations(best_pred)
-            audit_str = f"✅ 心算真伪通过 ({len(v_eqs)}等式)" if len(f_eqs) == 0 else f"🚨 检出假等式 ({len(f_eqs)}处: {f_eqs})"
-            print(f"--- [Step {step} ({stage_name}) 组内最佳 (Reward: {rewards[best_idx].item():.3f}, 命中: {solved_count}/{GROUP_SIZE}, 抓包作弊: {cheating_count}/{GROUP_SIZE})] ---\n"
-                  f"题目: {sample['numbers']} -> Target: {sample['target']} | PRM 审计: {audit_str}\n"
-                  f"{best_pred.strip()}\n"
-                  f"-------------------------------------------------------------", flush=True)
-
-        avg_resp_len = (response_mask.sum(dim=-1).float().mean()).item()
-        print(f"Step [{step:03d}/{TOTAL_STEPS}] [{stage_name}] | "
-              f"Solved: {solved_count}/{GROUP_SIZE} | "
-              f"Fakes: {cheating_count}/{GROUP_SIZE} | "
-              f"Mean R: {mean_r.item():.2f} | "
-              f"Max: {rewards.max().item():.2f} | "
-              f"Loss: {loss.item():.4f} | "
-              f"Len: {avg_resp_len:.1f}", flush=True)
-
-        # 定期保存检查点
-        if step % 20 == 0:
-            model.save_pretrained(f"./checkpoint-step-{step}")
-            tokenizer.save_pretrained(f"./checkpoint-step-{step}")
-
-        # 刷新历史纪录保存黄金存档
-        if mean_r.item() > best_reward:
-            best_reward = mean_r.item()
-            model.save_pretrained("./checkpoint-best-v3")
-            model.save_pretrained("./checkpoint-best")
-            print(f"🌟 刷新历史最佳 Mean Reward: {best_reward:.2f}，已更新至 ./checkpoint-best-v3 & ./checkpoint-best", flush=True)
+def main():
+    from trainer.run import run_training
+    run_training(parse_args(), macro=False)
 
 
 if __name__ == "__main__":
-    train()
+    main()

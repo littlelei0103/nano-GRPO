@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 # Checkpoints & Model Weights (Large binary files)
+checkpoints*/
 checkpoint-*/
 *.bin
 *.pt
@@ -11,9 +12,14 @@ checkpoint-*/
 *.safetensors
 *.ckpt
 
+
 # Logs & Runtime telemetry
+logs/
+archive_countdown/
 *.log
-train*.log
+*.log*
+train*.log*
+eval_pass8_history.json
 
 # Environments
 .env
@@ -37,3 +43,4 @@ venv.bak/
 
 # Scratch files
 scratch/
+archive_legacy/

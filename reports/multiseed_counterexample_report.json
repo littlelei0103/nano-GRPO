@@ -1,0 +1,112 @@
+{
+  "benchmark": "CounterexampleTask (Blind Test 20 problems, Val 20 problems)",
+  "num_seeds": 3,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "aggregated_metrics": {
+    "val_acc": {
+      "mean": 0.9,
+      "std": 0.0,
+      "values": [
+        0.9,
+        0.9,
+        0.9
+      ]
+    },
+    "base_greedy": {
+      "mean": 0.4,
+      "std": 0.0,
+      "values": [
+        0.4,
+        0.4,
+        0.4
+      ]
+    },
+    "checkpoint_best_greedy_pass1": {
+      "mean": 0.7833,
+      "std": 0.0289,
+      "values": [
+        0.8,
+        0.8,
+        0.75
+      ]
+    },
+    "checkpoint_best_sample_pass4": {
+      "mean": 0.85,
+      "std": 0.0,
+      "values": [
+        0.85,
+        0.85,
+        0.85
+      ]
+    },
+    "checkpoint_best_candidate_hit_rate": {
+      "mean": 0.75,
+      "std": 0.0331,
+      "values": [
+        0.7625,
+        0.7125,
+        0.775
+      ]
+    },
+    "checkpoint_last_greedy_pass1": {
+      "mean": 0.75,
+      "std": 0.0,
+      "values": [
+        0.75,
+        0.75,
+        0.75
+      ]
+    },
+    "checkpoint_last_sample_pass4": {
+      "mean": 0.9167,
+      "std": 0.0289,
+      "values": [
+        0.9,
+        0.9,
+        0.95
+      ]
+    }
+  },
+  "individual_runs": [
+    {
+      "label": "Seed 42",
+      "dir": "checkpoints_counterexample/20261014T102327Z-d1694cb8",
+      "best_step": 12,
+      "val_acc": 0.9,
+      "base_greedy": 0.4,
+      "test_greedy": 0.8,
+      "test_sample_p4": 0.85,
+      "test_sample_hit": 0.7625,
+      "last_greedy": 0.75,
+      "last_sample_p4": 0.9
+    },
+    {
+      "label": "Seed 43",
+      "dir": "checkpoints_counterexample/20261014T132832Z-225a3239",
+      "best_step": 13,
+      "val_acc": 0.9,
+      "base_greedy": 0.4,
+      "test_greedy": 0.8,
+      "test_sample_p4": 0.85,
+      "test_sample_hit": 0.7125,
+      "last_greedy": 0.75,
+      "last_sample_p4": 0.9
+    },
+    {
+      "label": "Seed 44",
+      "dir": "checkpoints_counterexample/20261014T135458Z-022190f1",
+      "best_step": 15,
+      "val_acc": 0.9,
+      "base_greedy": 0.4,
+      "test_greedy": 0.75,
+      "test_sample_p4": 0.85,
+      "test_sample_hit": 0.775,
+      "last_greedy": 0.75,
+      "last_sample_p4": 0.95
+    }
+  ]
+}
