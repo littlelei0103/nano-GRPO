@@ -230,14 +230,7 @@ Domain: [0, 50] | Counterexamples: [26, 27, 28, 29, 30, 31] (Sparsity: 49.02%)
 | Level 3 | 周期取模与分段逻辑 |
 | 可选 2D 扩展 | 二元输入、几何边界与分段条件 |
 
-```mermaid
-flowchart TD
-    A["任务规格与两个短函数"] --> B["模型输出候选输入 x"]
-    B --> C["环境执行 f_A(x) 与 f_B(x)"]
-    C --> D{"返回值是否不同？"}
-    D -->|是| E["Reward = 1"]
-    D -->|否| F["Reward = 0"]
-```
+![程序差分流程：任务规格与程序对 → 模型生成输入 → 环境执行验证；返回值不同奖励为 1，相同奖励为 0](./assets/counterexample_flow.svg)
 
 ### 扩展任务
 
@@ -268,11 +261,11 @@ flowchart TD
 
 每题采样 G 个候选，计算组内标准化优势。当前实现使用 PyTorch 的样本标准差：
 
-$$
+```math
 A_i = \frac{R_i - \mu_R}{s_R + \epsilon}, \qquad
 \mu_R = \frac{1}{G}\sum_{j=1}^{G}R_j, \qquad
 s_R = \sqrt{\frac{1}{G-1}\sum_{j=1}^{G}(R_j-\mu_R)^2}
-$$
+```
 
 全对或全错的组没有奖励优势信号。开启 KL 时，这些组仍可贡献参考策略正则项；KL 为零时跳过其反传。
 
@@ -280,14 +273,15 @@ $$
 
 通过 PEFT 的 `disable_adapter()` 获取基座参考概率，复用模型权重。采样、当前策略和参考策略的 logprob 使用相同温度。代码中的 k3 项为：
 
-$$
-\Delta_t = \log \pi_{\mathrm{ref}}(y_t \mid x,y_{<t})
-           - \log \pi_\theta(y_t \mid x,y_{<t})
-$$
+```math
+\Delta_t = \log \pi_{\mathrm{ref}}(y_t \mid h_t) - \log \pi_\theta(y_t \mid h_t)
+```
 
-$$
+这里的历史上下文 $h_t$ 包含 prompt 和第 t 个 token 之前的补全。
+
+```math
 k_{3,t} = \exp(\Delta_t) - 1 - \Delta_t
-$$
+```
 
 实现使用 FP32 `expm1` 并将微小负舍入值截为零；没有额外除以温度平方。
 
@@ -295,12 +289,12 @@ $$
 
 每轮打乱训练池，将其切分为 `problems_per_update` 大小的题目批次。每题先按整组有效补全 token 数归一化，再按本次更新的题目数平均：
 
-$$
+```math
 \mathcal{L}_{\mathrm{update}}
 = \frac{1}{M}\sum_{q=1}^{M}
   \frac{\sum_{i=1}^{G}\sum_t m_{q,i,t}\,\ell_{q,i,t}}
        {\sum_{i=1}^{G}\sum_t m_{q,i,t}+\epsilon}
-$$
+```
 
 这里 M 是本次更新的题目数，m 是有效 token 掩码，ℓ 是 PPO-Clip 策略损失与 KL 正则之和。`micro_batch_size` 控制单次前向、反传的候选数，归一化分母仍覆盖整题的全部候选。
 
