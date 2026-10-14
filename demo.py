@@ -79,8 +79,12 @@ def main():
     if args.prob_idx >= 0 and args.prob_idx < len(test_problems):
         selected_problems = [test_problems[args.prob_idx]]
     else:
-        # 挑选经典代表性案例
-        selected_problems = test_problems[:args.num_cases]
+        # 智能挑选跨越不同难度层级的经典代表性案例 (覆盖 Level 1 比较偏差, Level 2 区间端点包含, Level 2 极值截断等)
+        representative_indices = [0, 14, 4, 9, 1]
+        chosen = [test_problems[i] for i in representative_indices if i < len(test_problems)]
+        if len(chosen) < args.num_cases:
+            chosen.extend([p for p in test_problems if p not in chosen][:args.num_cases])
+        selected_problems = chosen[:args.num_cases]
 
     cfg = rollout_generation_config(tokenizer, max_new_tokens=24, temperature=0.7, do_sample=False)
 

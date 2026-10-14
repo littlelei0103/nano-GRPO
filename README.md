@@ -40,7 +40,7 @@
   <img src="./assets/training_curves.png" width="95%" alt="nano-GRPO Training Trajectory">
 </div>
 
-*图注：基于 15 轮宏步（75 次优化器参数更新，累计 3,600 次探索采样）的训练动力学全景。左上：贪心通过率跃升轨迹；右上：全错（All-Zero）与全对（All-One）题目的剪刀差收敛；左下：损失收敛与平稳梯度范数；右下：受控参考策略 KL 漂移（维持在 0.05 散度阈值内）。*
+*图注：基于 3 轮独立随机种子（Seed 42, 43, 44，每轮 15 宏步 / 75 次参数更新）的训练动力学全景（实线为均值，阴影带为 $\pm 1\sigma$ 标准差）。左上：训练集与验证集通过率跃升，最终盲测大考稳定收敛至 78.3% $\pm$ 2.9%（采样 Pass@4 达 85.0%）；右上：全错（All-Zero）与全对（All-One）题目的剪刀差收敛与有效梯度探索组演化；左下：优化器平稳梯度范数与 Token 归一化 GRPO 损失收敛；右下：参考基座策略 KL 散度与紧凑 Token 生成长度（全程稳定在 6~7 Tokens，无长度膨胀）。*
 
 ---
 
@@ -49,15 +49,15 @@
 执行交互脚本，可从独立测试集中抽选样例，直观比对基座策略与强化学习策略的执行结果：
 
 ```bash
-python demo.py --num_cases 2
+python demo.py --num_cases 3
 ```
 
-**控制台实测输出快照：**
+**控制台实测输出快照（覆盖单点比较偏差、区间端点包含、极值截断等不同难度梯队）：**
 ```text
 ========================================================================
 nano-GRPO: Program Differential Testing & Counterexample Mining Demo
 Base Model: Qwen/Qwen2.5-1.5B | Device: cuda
-RLVR Checkpoint: checkpoints_counterexample/20261014T102327Z-d1694cb8/checkpoint-best
+RLVR Checkpoint: checkpoints_counterexample/20261014T135458Z-022190f1/checkpoint-best
 ========================================================================
 [Model Init] Loading base model and LoRA adapter weights...
 [Model Setup] Loading base tokenizer and model: Qwen/Qwen2.5-1.5B...
@@ -77,24 +77,39 @@ Domain: [0, 50] | Counterexamples: [38] (Sparsity: 1.96%)
 ────────────────────────────────────────────────────────────────────────
   Zero-Shot Base Policy                 │  RLVR Optimized Policy
   Raw: '39</input>'                     │  Raw: '38</input>'
-  Parsed Input: x = 39                  │  Parsed Input: x = 38
-  f_A(39) = False                       │  f_A(38) = False
-  f_B(39) = False                       │  f_B(38) = True
+  Parsed Input: 39                      │  Parsed Input: 38
+  f_A(39)             = False           │  f_A(38)             = False
+  f_B(39)             = False           │  f_B(38)             = True
   Verification: Outputs Match (0.0)     │  Verification: Divergence Confirmed (+1.0)
 ────────────────────────────────────────────────────────────────────────
-[Case 2] Problem ID: cmp_gt_gte_36 | Tier: level_1
-Specification: Check if x is strictly greater than 46 vs at least 46.
-Domain: [0, 50] | Counterexamples: [46] (Sparsity: 1.96%)
+[Case 2] Problem ID: interval_right_open_30 | Tier: level_2
+Specification: Interval inclusion: [33, 42] vs [33, 42).
+Domain: [0, 50] | Counterexamples: [42] (Sparsity: 1.96%)
 ────────────────────────────────────────────────────────────────────────
 【Program Pair Specification】:
   def f_a(x: int) -> bool:           │  def f_b(x: int) -> bool:
-      return x > 46                  │      return x >= 46
+      return 33 <= x <= 42           │      return 33 <= x < 42
 ────────────────────────────────────────────────────────────────────────
   Zero-Shot Base Policy                 │  RLVR Optimized Policy
-  Raw: '47</input>'                     │  Raw: '46</input>'
-  Parsed Input: x = 47                  │  Parsed Input: x = 46
-  f_A(47) = True                        │  f_A(46) = False
-  f_B(47) = True                        │  f_B(46) = True
+  Raw: '33</input>'                     │  Raw: '42</input>'
+  Parsed Input: 33                      │  Parsed Input: 42
+  f_A(33)             = True            │  f_A(42)             = True
+  f_B(33)             = True            │  f_B(42)             = False
+  Verification: Outputs Match (0.0)     │  Verification: Divergence Confirmed (+1.0)
+────────────────────────────────────────────────────────────────────────
+[Case 3] Problem ID: clamp_abs_min_clip_33 | Tier: level_2
+Specification: Upper bound clamp using min(x, 25) vs min(x, 26).
+Domain: [0, 50] | Counterexamples: [26, 27, 28, 29, 30, 31] (Sparsity: 49.02%)
+────────────────────────────────────────────────────────────────────────
+【Program Pair Specification】:
+  def f_a(x: int) -> int:            │  def f_b(x: int) -> int:
+      return min(x, 25)              │      return min(x, 26)
+────────────────────────────────────────────────────────────────────────
+  Zero-Shot Base Policy                 │  RLVR Optimized Policy
+  Raw: '25</input>'                     │  Raw: '50</input>'
+  Parsed Input: 25                      │  Parsed Input: 50
+  f_A(25)             = 25              │  f_A(50)             = 25
+  f_B(25)             = 25              │  f_B(50)             = 26
   Verification: Outputs Match (0.0)     │  Verification: Divergence Confirmed (+1.0)
 ========================================================================
 ```
@@ -115,27 +130,12 @@ Domain: [0, 50] | Counterexamples: [46] (Sparsity: 1.96%)
   * **Level 2 (区间裁剪与截断差异)**：区间端点与极值函数截断（如 `min(x, c)` vs `min(x, c + 1)`），稀疏度 3% ~ 10%；
   * **Level 3 (周期取模与分段逻辑)**：周期性取模偏移与多分支逻辑判断。
 
-```
-                       ┌────────────────────────────────────────┐
-                       │   输入: 任务规格 Spec + 程序对 (f_A, f_B)  │
-                       └───────────────────┬────────────────────┘
-                                           │
-                                           ▼
-                       ┌────────────────────────────────────────┐
-                       │   策略模型定位边界输入 (8~32 Tokens)       │
-                       │   输出格式: <input>INTEGER</input>      │
-                       └───────────────────┬────────────────────┘
-                                           │
-                                           ▼
-                       ┌────────────────────────────────────────┐
-                       │   确定性沙盒并行执行: f_A(x) 与 f_B(x)      │
-                       └───────────────────┬────────────────────┘
-                                           │
-                     ┌─────────────────────┴─────────────────────┐
-                     ▼                                           ▼
-           [f_A(x) != f_B(x)]                          [f_A(x) == f_B(x)]
-          命中差分反例 (Divergence)                    输出一致 (No Divergence)
-               Reward = +1.0                               Reward = 0.0
+```mermaid
+flowchart TD
+    A["输入: 任务规格 Spec + 程序对 (f_A, f_B)"] --> B["策略模型定位边界输入 (8~32 Tokens)<br/>输出格式: &lt;input&gt;INTEGER&lt;/input&gt;"]
+    B --> C["确定性沙盒并行执行: f_A(x) 与 f_B(x)"]
+    C -->|f_A(x) != f_B(x)| D["命中差分反例 (Divergence)<br/>Reward = +1.0"]
+    C -->|f_A(x) == f_B(x)| E["输出一致 (No Divergence)<br/>Reward = 0.0"]
 ```
 
 ---
@@ -144,22 +144,31 @@ Domain: [0, 50] | Counterexamples: [46] (Sparsity: 1.96%)
 
 ### 1. 组相对优势估计 (Group Relative Advantage Estimation)
 针对单个输入 prompt，采样 $G$ 路候选回答，经沙盒执行获得标量奖励序列 $R = [R_1, \dots, R_G]$。组内标准化优势定义为：
-$$A_i = \frac{R_i - \mu_R}{\sigma_R + \epsilon}$$
-其中 $\mu_R = \frac{1}{G}\sum R_j$，$\sigma_R = \sqrt{\frac{1}{G}\sum (R_j - \mu_R)^2}$。  
-**零方差过滤保护 (Zero-Variance Guard)**：当整组候选全对或全错时（$\sigma_R < 10^{-6}$），主动跳过策略梯度反传，避免无效梯度扰动。
+
+$$
+A_i = \frac{R_i - \mu_R}{\sigma_R + \epsilon}, \quad \mu_R = \frac{1}{G}\sum_{j=1}^G R_j, \quad \sigma_R = \sqrt{\frac{1}{G}\sum_{j=1}^G (R_j - \mu_R)^2}
+$$
+
+**零方差过滤保护 (Zero-Variance Guard)**：当整组候选全对或全错时（ $\sigma_R < 10^{-6}$ ），主动跳过策略梯度反传，避免无效梯度扰动。
 
 ### 2. 无偏基座参考策略 KL 正则化 (Schulman k3 Estimator)
 使用 PEFT 动态禁用 LoRA 适配器（`disable_adapter()`）直接获取基座模型的真实参考对数概率 $\log \pi_{\mathrm{ref}}$，无需加载双份模型权重，显著节约显存。  
 采用高精度非负 Schulman k3 近似估计器：
-$$D_{\mathrm{KL}}^{\mathrm{approx}} = \frac{\exp(\Delta) - 1 - \Delta}{\tau^2}, \quad \Delta = \log \pi_\theta(y_t|x, y_{<t}) - \log \pi_{\mathrm{ref}}(y_t|x, y_{<t})$$
+
+$$
+D_{\mathrm{KL}}^{\mathrm{approx}} = \frac{\exp(\Delta) - 1 - \Delta}{\tau^2}, \quad \Delta = \log \pi_\theta(y_t|x, y_{<t}) - \log \pi_{\mathrm{ref}}(y_t|x, y_{<t})
+$$
+
 在 FP32 精度下通过 `torch.expm1` 计算，避免半精度浮点消减误差，确保策略优化不会脱离基座语言流利度约束。
 
 ### 3. 宏步梯度累积与子批次参数更新 (Macro-Batch Scheduling)
 * **固定锚点池重锚定**：构建包含 60 道题目的固定训练集池（Anchor Pool）。每轮全局步（Global Step）前随机重排题目次序。
 * **子批次增量更新**：设置 `problems_per_update=12`，将全池划分为 5 组子批次。在每个子批次内累积多题梯度后触发参数更新，兼顾高频参数更新与全题库探索覆盖。
-* **严格 Token 级与题目级两级归一化**：
-  $$\mathcal{L}_{\mathrm{update}} = \frac{1}{M} \sum_{m=1}^M \frac{\sum_{t} \mathcal{L}_{m, t} \cdot \mathrm{mask}_{m, t}}{\sum_{t} \mathrm{mask}_{m, t} + \epsilon}$$
-  损失计算对显存微批次（`micro_batch_size`）划分严格不变。
+* **严格 Token 级与题目级两级归一化**：损失计算对显存微批次（`micro_batch_size`）划分严格保持数学不变：
+
+$$
+\mathcal{L}_{\mathrm{update}} = \frac{1}{M} \sum_{m=1}^M \frac{\sum_{t} \mathcal{L}_{m, t} \cdot \mathrm{mask}_{m, t}}{\sum_{t} \mathrm{mask}_{m, t} + \epsilon}
+$$
 
 ---
 
