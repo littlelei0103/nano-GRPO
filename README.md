@@ -46,7 +46,27 @@
 
 ![三个训练种子的训练曲线](./assets/training_curves.png)
 
-*实线为均值，阴影为 ±1 个标准差。图中依次展示成功率、奖励组分布、损失与梯度、KL 与生成长度。*
+*左侧为训练候选成功率与验证集贪心成功率，阴影为三个种子间的 ±1 个样本标准差。右侧为验证集选出的最佳检查点在测试集上的结果；圆点代表各次实验，误差线为样本标准差。采样 Pass@4 每题使用四次尝试。*
+
+<details>
+<summary>展开训练诊断：奖励组、梯度、损失、KL 与生成长度</summary>
+
+![三个训练种子的训练诊断](./assets/training_curves_diagnostics.png)
+
+*各指标独立使用纵轴；右下角展示每个种子的 KL，便于识别均值掩盖的波动。曲线使用原始逐步日志，没有做平滑。*
+
+</details>
+
+完成训练后，可从本地实验日志重新生成两张图：
+
+```bash
+python scripts/plot_metrics.py
+
+# 指定单次实验；重复 --run_dir 可选择需要聚合的实验
+python scripts/plot_metrics.py --run_dir "checkpoints_counterexample/替换为实际run-id" --output assets/single_run.png
+```
+
+绘图脚本同时输出 PNG 和 SVG；矢量版本见 [主图](./assets/training_curves.svg) 与 [诊断图](./assets/training_curves_diagnostics.svg)。
 
 <a id="quickstart"></a>
 ## 快速开始

@@ -1,307 +1,261 @@
-"""
-scripts/plot_metrics.py - 绘制训练指标曲线与演化飞轮图表 (支持单轮运行与多随机种子均值/标准差聚合)
-"""
+"""Plot learning results and separate diagnostics from actual experiment files.
 
+Default: aggregate completed Counterexample runs. --run_dir selects one run;
+repeating --run_dir selects an explicit set. Missing metrics remain missing.
+"""
 import argparse
-import glob
 import json
-import os
-import shutil
-import numpy as np
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
+
+COLORS = {"train": "#3269c8", "val": "#16877b", "base": "#a3adbd",
+          "test": "#6355b1", "zero": "#c36b59", "mixed": "#8b73b5"}
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Plot RLVR Training Metrics")
-    parser.add_argument("--run_dir", type=str, default="",
-                        help="指定单个实验目录路径 (默认自动聚合 checkpoints_counterexample 下的多轮运行)")
-    parser.add_argument("--output", type=str, default="assets/training_curves.png",
-                        help="输出图表保存路径")
-    return parser.parse_args()
+def load_runs(paths):
+    runs = []
+    for path in paths:
+        root = Path(path)
+        records = [json.loads(line) for line in (root / "metrics.jsonl").read_text().splitlines()
+                   if line.strip()]
+        if not records:
+            raise ValueError(f"No metrics in {root}")
+        by_step = {}
+        for record in records:
+            step = record["step"]
+            if step in by_step:
+                raise ValueError(f"Duplicate step {step} in {root}; select an unambiguous run")
+            by_step[step] = record
+        manifest = root / "run_manifest.json"
+        config = json.loads(manifest.read_text()).get("config", {}) if manifest.exists() else {}
+        config.setdefault("dynamic_resampling", False)
+        report = root / "final_test_report.json"
+        runs.append({"root": root, "records": by_step, "config": config,
+                     "report": json.loads(report.read_text()) if report.exists() else {},
+                     "label": f"Seed {config['seed']}" if "seed" in config else root.name})
+    if not runs:
+        raise ValueError("No runs selected")
+    for key in ("model_name", "task", "group_size", "anchor_size", "problems_per_update",
+                "max_new_tokens", "temperature", "top_p", "dynamic_resampling"):
+        values = {json.dumps(run["config"].get(key), sort_keys=True) for run in runs}
+        if len(values) != 1:
+            raise ValueError(f"Cannot combine runs with different {key}")
+    return runs
+
+
+def metric_matrix(runs, key, scale=1):
+    steps = sorted({step for run in runs for step in run["records"]})
+    values = np.full((len(runs), len(steps)), np.nan)
+    for i, run in enumerate(runs):
+        for j, step in enumerate(steps):
+            value = run["records"].get(step, {}).get(key)
+            if value is not None:
+                values[i, j] = float(value) * scale
+    return np.asarray(steps), values
+
+
+def mean_std(values):
+    """Column-wise mean and sample SD; an unavailable SD stays NaN."""
+    means = np.full(values.shape[1], np.nan)
+    stds = np.full(values.shape[1], np.nan)
+    for j in range(values.shape[1]):
+        finite = values[:, j][np.isfinite(values[:, j])]
+        if len(finite):
+            means[j] = finite.mean()
+        if len(finite) > 1:
+            stds[j] = finite.std(ddof=1)
+    return means, stds
+
+
+def draw_series(ax, runs, key, color, label=None, scale=1, linestyle="-", bounded=False):
+    steps, values = metric_matrix(runs, key, scale)
+    mean, std = mean_std(values)
+    if not np.isfinite(mean).any():
+        return False
+    ax.plot(steps, mean, color=color, label=label, linewidth=2.1, linestyle=linestyle)
+    low, high = mean - std, mean + std
+    if bounded:
+        low, high = np.clip(low, 0, 100), np.clip(high, 0, 100)
+    ax.fill_between(steps, low, high, color=color, alpha=.12, linewidth=0)
+    return True
+
+
+def style_axis(ax, title, ylabel):
+    ax.set_title(title, loc="left", fontsize=12, fontweight="bold", pad=13, color="#263449")
+    ax.set_ylabel(ylabel, fontsize=10, color="#546174", labelpad=8)
+    ax.set_xlabel("Global step", fontsize=10, color="#546174", labelpad=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    for name in ("bottom", "left"):
+        ax.spines[name].set_color("#d7dee8")
+    ax.tick_params(colors="#68758a", labelsize=9, length=0, pad=6)
+    ax.grid(axis="y", color="#e8edf4", linewidth=.7)
+    ax.set_axisbelow(True)
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=6))
+
+
+def test_values(runs, kind):
+    values = []
+    for run in runs:
+        result = run["report"].get("blind_test_evaluation", {})
+        if kind == "base":
+            value = (result.get("base") or {}).get("problem_pass_rate")
+        else:
+            selected = (result.get("checkpoint_best") or {}).get(kind, {})
+            value = selected.get("problem_pass_rate")
+        if value is not None:
+            values.append(float(value) * 100)
+    return np.asarray(values)
+
+
+def draw_test(ax, runs):
+    ax.set_title("Held-out test", loc="left", fontsize=12, fontweight="bold", pad=13, color="#263449")
+    ax.set_xlim(0, 105); ax.set_ylim(-.5, 3.3)
+    ax.set_yticks([])
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color("#d7dee8")
+    ax.tick_params(axis="x", colors="#68758a", labelsize=9, length=0, pad=6)
+    ax.xaxis.set_major_formatter(ticker.PercentFormatter())
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(25))
+    ax.set_xlabel("Solved problems", fontsize=10, color="#546174", labelpad=8)
+    ax.grid(axis="x", color="#e8edf4", linewidth=.7); ax.set_axisbelow(True)
+    for y, key, label, color in ((2.6, "base", "Base / greedy", COLORS["base"]),
+                                (1.4, "greedy", "GRPO / greedy", COLORS["test"]),
+                                (.2, "sample", "GRPO / sample@4", COLORS["val"])):
+        values = test_values(runs, key)
+        ax.text(0, y+.36, label, fontsize=10, color="#546174")
+        if not len(values):
+            ax.text(100, y+.36, "Not evaluated", ha="right", fontsize=10, color="#68758a")
+            continue
+        mean = values.mean(); std = values.std(ddof=1) if len(values) > 1 else None
+        ax.barh(y, mean, height=.28, color=color, alpha=.85, zorder=3)
+        if std is not None:
+            ax.errorbar(mean, y, xerr=std, fmt="none", ecolor="#263449", capsize=4, linewidth=1.3, zorder=5)
+        offsets = np.linspace(-.075, .075, len(values)) if len(values) > 1 else np.zeros(1)
+        ax.scatter(values, y+offsets, color="white", edgecolors=color, s=25, linewidth=.9, zorder=6)
+        score = f"{mean:.1f}%" + (f" ± {std:.1f}%" if std is not None else "")
+        if len(values) != len(runs):
+            score += f" (n={len(values)})"
+        ax.text(100, y+.36, score, ha="right", fontsize=10, fontweight="bold", color="#263449")
+
+
+def figure_header(fig, runs, title):
+    model = runs[0]["config"].get("model_name", "Model not recorded").split("/")[-1]
+    if all("seed" in run["config"] for run in runs):
+        labels = ", ".join(str(run["config"]["seed"]) for run in runs)
+        seed_word = "seed" if len(runs) == 1 else "seeds"
+        run_label = f"{len(runs)} training {seed_word}: {labels}"
+    else:
+        run_label = f"{len(runs)} training run(s)"
+    fig.text(.07, .955, title, fontsize=19, fontweight="bold", color="#1d2d43", va="top")
+    fig.text(.07, .893, f"{model}  ·  {run_label}",
+             fontsize=10, color="#68758a", va="top")
+
+
+def save_figure(fig, output):
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=220, facecolor="white")
+    # Provide a vector version for export as well as the README's PNG.
+    if output.suffix.lower() != ".svg":
+        fig.savefig(output.with_suffix(".svg"), facecolor="white")
+    plt.close(fig)
+    print(f"Saved {output}")
+
+
+def plot_runs(paths, output_path, diagnostics_path=None):
+    runs = load_runs(paths)
+    with plt.rc_context({"font.family": "DejaVu Sans", "svg.fonttype": "path"}):
+        fig = plt.figure(figsize=(12, 4.9))
+        axes = fig.subplots(1, 2, gridspec_kw={"width_ratios": [1.6, 1]})
+        fig.subplots_adjust(left=.07, right=.97, bottom=.21, top=.77, wspace=.24)
+        figure_header(fig, runs, "nano-GRPO / Learning to find counterexamples")
+        ax = axes[0]
+        style_axis(ax, "Learning curves", "Success rate")
+        draw_series(ax, runs, "anchor_pass_rate", COLORS["train"], "Train / sampled candidates", 100, bounded=True)
+        draw_series(ax, runs, "val_acc", COLORS["val"], "Validation / greedy", 100, "--", bounded=True)
+        ax.set_ylim(0, 100)
+        ax.yaxis.set_major_formatter(ticker.PercentFormatter())
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc="upper left", frameon=False, fontsize=9, handlelength=2)
+        draw_test(axes[1], runs)
+        curve_note = "Curves: mean ± sample SD across available runs." if len(runs) > 1 else "Curves: single-run observations."
+        fig.text(.07, .07, curve_note + " Test: validation-selected checkpoint-best.",
+                 fontsize=9, color="#68758a")
+        test_note = "Test dots: individual runs. Whiskers: sample SD." if len(runs) > 1 else "Test dots: one run; across-run SD unavailable."
+        fig.text(.07, .035, test_note + " sample@4 uses four attempts per problem.",
+                 fontsize=9, color="#68758a")
+        save_figure(fig, output_path)
+
+        output = Path(output_path)
+        diagnostics = diagnostics_path or output.with_name(output.stem + "_diagnostics" + output.suffix)
+        fig, axes = plt.subplots(2, 3, figsize=(12, 7.2))
+        fig.subplots_adjust(left=.07, right=.97, bottom=.13, top=.8, wspace=.33, hspace=.55)
+        figure_header(fig, runs, "nano-GRPO / Training diagnostics")
+        specs = [("Reward groups", "Problems", None, None),
+                 ("Gradient norm", "Norm before clipping", "grad_norm", "#ba8050"),
+                 ("GRPO loss", "Token-normalized loss", "avg_loss", COLORS["train"]),
+                 ("Reference KL", "Sampled k3 estimate", "approx_kl", COLORS["test"]),
+                 ("Completion length", "Tokens per candidate", "avg_len", COLORS["val"]),
+                 ("Reference KL / individual runs", "Sampled k3 estimate", None, None)]
+        for ax, (title, ylabel, key, color) in zip(axes.flat, specs):
+            style_axis(ax, title, ylabel)
+            if key:
+                present = draw_series(ax, runs, key, color)
+                if not present:
+                    ax.text(.5, .5, "Not recorded", transform=ax.transAxes, ha="center", color="#68758a")
+                if key == "avg_loss":
+                    ax.axhline(0, color="#b6c0cc", linewidth=.8, linestyle="--")
+                else:
+                    ax.set_ylim(bottom=0)
+        for key, color, label in (("all_one_problems", COLORS["val"], "All correct"),
+                                   ("all_zero_problems", COLORS["zero"], "All wrong"),
+                                   ("effective_problems", COLORS["mixed"], "Mixed rewards")):
+            draw_series(axes[0, 0], runs, key, color, label)
+        axes[0, 0].set_ylim(bottom=0)
+        problem_count = runs[0]["config"].get("anchor_size")
+        if problem_count:
+            axes[0, 0].set_ylim(0, problem_count)
+        if axes[0, 0].get_legend_handles_labels()[0]:
+            axes[0, 0].legend(frameon=False, fontsize=8, loc="upper right")
+        steps, values = metric_matrix(runs, "approx_kl")
+        for i, run in enumerate(runs):
+            if np.isfinite(values[i]).any():
+                axes[1, 2].plot(steps, values[i], label=run["label"], linewidth=1.7)
+        if axes[1, 2].get_legend_handles_labels()[0]:
+            axes[1, 2].legend(frameon=False, fontsize=8, loc="upper left")
+        else:
+            axes[1, 2].text(.5, .5, "Not recorded", transform=axes[1, 2].transAxes,
+                            ha="center", color="#68758a")
+        axes[1, 2].set_ylim(bottom=0)
+        diagnostic_note = "Shading: ±1 sample SD; individual KL traces expose divergence hidden by the mean." if len(runs) > 1 else "Single-run observations; no across-run standard deviation."
+        fig.text(.07, .04, diagnostic_note + " No smoothing or dual axes.",
+                 fontsize=9, color="#68758a")
+        save_figure(fig, diagnostics)
+    return runs
 
 
 def plot_single_run(run_dir, output_path):
-    print(f"📊 正在从单个实验目录提取训练流水数据: {run_dir}")
-    metrics_path = os.path.join(run_dir, "metrics.jsonl")
-    report_path = os.path.join(run_dir, "final_test_report.json")
-
-    steps = []
-    anchor_pass_rates = []
-    val_accs = []
-    all_ones = []
-    all_zeros = []
-    effective_groups = []
-    losses = []
-    grad_norms = []
-    kl_divs = []
-    avg_lens = []
-
-    with open(metrics_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            m = json.loads(line)
-            steps.append(m["step"])
-            anchor_pass_rates.append(m.get("anchor_pass_rate", 0.0) * 100)
-            if "val_acc" in m:
-                val_accs.append((m["step"], m["val_acc"] * 100))
-            all_ones.append(m.get("all_one_problems", 0))
-            all_zeros.append(m.get("all_zero_problems", 0))
-            effective_groups.append(m.get("effective_problems", 0))
-            losses.append(m.get("avg_loss", 0.0))
-            grad_norms.append(m.get("grad_norm", 0.0))
-            kl_divs.append(m.get("approx_kl", 0.0))
-            avg_lens.append(m.get("avg_len", 0.0))
-
-    test_report = {}
-    if os.path.isfile(report_path):
-        with open(report_path, "r", encoding="utf-8") as f:
-            test_report = json.load(f)
-
-    plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), dpi=300)
-    plt.subplots_adjust(hspace=0.28, wspace=0.22)
-
-    # 1. 通关胜率演化
-    ax1 = axes[0, 0]
-    ax1.plot(steps, anchor_pass_rates, color="#1f77b4", marker="o", linewidth=2.2, label="Train Anchor Pass Rate (60 probs)")
-    if val_accs:
-        val_x, val_y = zip(*val_accs)
-        ax1.plot(val_x, val_y, color="#2ca02c", marker="s", linewidth=2.0, linestyle="--", label="Validation Pass Rate (20 probs)")
-    
-    if "blind_test_evaluation" in test_report:
-        b_res = test_report["blind_test_evaluation"].get("checkpoint_best", {}).get("greedy", {}).get("problem_pass_rate")
-        base_res = test_report["blind_test_evaluation"].get("base", {}).get("problem_pass_rate") if test_report["blind_test_evaluation"].get("base") else None
-        if b_res is not None and base_res is not None:
-            best_step = test_report.get("validation_selection", {}).get("best_step", steps[-1])
-            ax1.scatter([0], [base_res * 100], color="#d62728", s=100, zorder=5, label=f"Blind Test (Base): {base_res*100:.0f}%")
-            ax1.scatter([best_step], [b_res * 100], color="#ff7f0e", marker="*", s=220, zorder=5, label=f"Blind Test (Best): {b_res*100:.0f}% (+100%)")
-            ax1.annotate(f"Best Step {best_step}\nTest Pass@1: {b_res*100:.0f}%",
-                         (best_step, b_res * 100), textcoords="offset points", xytext=(-25, 12),
-                         bbox=dict(boxstyle="round,pad=0.3", fc="#fff2cc", ec="#d6b656", lw=1),
-                         arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color="#b45f06"))
-
-    ax1.set_title("Pass Rate Trajectory (Train, Val & Blind Test)", fontsize=13, fontweight="bold", pad=8)
-    ax1.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax1.set_ylabel("Pass Rate (%)", fontsize=10)
-    ax1.yaxis.set_major_formatter(ticker.PercentFormatter())
-    ax1.set_ylim(15, 100)
-    ax1.legend(loc="lower right", frameon=True, fontsize=9)
-    ax1.grid(True, linestyle=":", alpha=0.6)
-
-    # 2. 掌握度分布演变
-    ax2 = axes[0, 1]
-    ax2.plot(steps, all_ones, color="#2ca02c", marker="^", linewidth=2.2, label="Mastered (4/4 Solved)")
-    ax2.plot(steps, all_zeros, color="#d62728", marker="v", linewidth=2.2, label="Failed (0/4 Solved)")
-    ax2.plot(steps, effective_groups, color="#9467bd", linestyle=":", marker="d", linewidth=1.8, label="Effective Gradient Groups (0<k<4)")
-    ax2.set_title("Problem Mastery Distribution (60-Problem Pool)", fontsize=13, fontweight="bold", pad=8)
-    ax2.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax2.set_ylabel("Number of Problems", fontsize=10)
-    ax2.set_ylim(0, 60)
-    ax2.legend(loc="center right", frameon=True, fontsize=9)
-    ax2.grid(True, linestyle=":", alpha=0.6)
-
-    # 3. 梯度与优化动态
-    ax3 = axes[1, 0]
-    color_grad = "#ff7f0e"
-    ax3.plot(steps, grad_norms, color=color_grad, marker="o", linewidth=2.0, label="Gradient Norm")
-    ax3.set_title("Optimization Dynamics: Gradient Norm & Loss", fontsize=13, fontweight="bold", pad=8)
-    ax3.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax3.set_ylabel("Gradient Norm", color=color_grad, fontsize=10)
-    ax3.tick_params(axis="y", labelcolor=color_grad)
-    ax3.grid(True, linestyle=":", alpha=0.6)
-
-    ax3_twin = ax3.twinx()
-    color_loss = "#1f77b4"
-    ax3_twin.plot(steps, losses, color=color_loss, linestyle="--", linewidth=1.8, label="GRPO Loss")
-    ax3_twin.set_ylabel("Token-Normalized GRPO Loss", color=color_loss, fontsize=10)
-    ax3_twin.tick_params(axis="y", labelcolor=color_loss)
-
-    # 4. KL 散度与生成长度
-    ax4 = axes[1, 1]
-    color_kl = "#8c564b"
-    ax4.plot(steps, kl_divs, color=color_kl, marker="s", linewidth=2.0, label="Schulman k3 KL Divergence")
-    ax4.set_title("Policy Constraint & Output Economy", fontsize=13, fontweight="bold", pad=8)
-    ax4.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax4.set_ylabel("Base Reference KL", color=color_kl, fontsize=10)
-    ax4.tick_params(axis="y", labelcolor=color_kl)
-    ax4.grid(True, linestyle=":", alpha=0.6)
-
-    ax4_twin = ax4.twinx()
-    color_len = "#17becf"
-    ax4_twin.plot(steps, avg_lens, color=color_len, linestyle="-.", linewidth=1.8, label="Avg Generated Tokens")
-    ax4_twin.set_ylabel("Average Completion Length (Tokens)", color=color_len, fontsize=10)
-    ax4_twin.tick_params(axis="y", labelcolor=color_len)
-    ax4_twin.set_ylim(4, 15)
-
-    run_name = os.path.basename(run_dir)
-    fig.suptitle(f"nano-GRPO: Nano Counterexample RLVR Training Trajectory ({run_name})\nQwen2.5-1.5B on NVIDIA RTX 5070 (8GB VRAM)",
-                 fontsize=14, fontweight="bold", y=0.98)
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, bbox_inches="tight")
-    print(f"✅ 单轮图表已保存至: {output_path}")
+    return plot_runs([run_dir], output_path)
 
 
 def plot_multi_seed(runs, output_path):
-    print(f"📊 正在聚合 {len(runs)} 组独立随机种子运行数据: {[os.path.basename(r) for r in runs]}")
-    all_runs_data = []
-    for r in runs:
-        with open(os.path.join(r, "metrics.jsonl"), "r", encoding="utf-8") as f:
-            all_runs_data.append([json.loads(l) for l in f if l.strip()])
-
-    steps = np.array([m["step"] for m in all_runs_data[0]])
-
-    def get_arr(key, scale=1.0):
-        return np.array([[m.get(key, 0.0) * scale for m in run] for run in all_runs_data])
-
-    anchor_arr = get_arr("anchor_pass_rate", 100.0)
-    val_arr = get_arr("val_acc", 100.0)
-    all_ones_arr = get_arr("all_one_problems", 1.0)
-    all_zeros_arr = get_arr("all_zero_problems", 1.0)
-    eff_arr = get_arr("effective_problems", 1.0)
-    loss_arr = get_arr("avg_loss", 1.0)
-    grad_arr = get_arr("grad_norm", 1.0)
-    kl_arr = get_arr("approx_kl", 1.0)
-    len_arr = get_arr("avg_len", 1.0)
-
-    # 读取多种子聚合盲测数据
-    multiseed_report_path = "reports/multiseed_counterexample_report.json"
-    mean_test_pass1 = 78.33
-    std_test_pass1 = 2.89
-    mean_test_pass4 = 85.00
-    std_test_pass4 = 0.00
-    base_greedy = 40.0
-    if os.path.isfile(multiseed_report_path):
-        with open(multiseed_report_path, "r", encoding="utf-8") as f:
-            ms_data = json.load(f)
-            mean_test_pass1 = ms_data.get("aggregated_metrics", {}).get("checkpoint_best_greedy_pass1", {}).get("mean", 0.7833) * 100
-            std_test_pass1 = ms_data.get("aggregated_metrics", {}).get("checkpoint_best_greedy_pass1", {}).get("std", 0.0289) * 100
-            mean_test_pass4 = ms_data.get("aggregated_metrics", {}).get("checkpoint_best_sample_pass4", {}).get("mean", 0.85) * 100
-            std_test_pass4 = ms_data.get("aggregated_metrics", {}).get("checkpoint_best_sample_pass4", {}).get("std", 0.0) * 100
-            base_greedy = ms_data.get("aggregated_metrics", {}).get("base_greedy", {}).get("mean", 0.4) * 100
-
-    plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), dpi=300)
-    plt.subplots_adjust(hspace=0.28, wspace=0.22)
-
-    # 1. 通关胜率演化 (Mean ± Std)
-    ax1 = axes[0, 0]
-    m_anchor, s_anchor = np.mean(anchor_arr, axis=0), np.std(anchor_arr, axis=0)
-    m_val, s_val = np.mean(val_arr, axis=0), np.std(val_arr, axis=0)
-
-    ax1.plot(steps, m_anchor, color="#1f77b4", marker="o", linewidth=2.4, label=f"Train Anchor (Mean, N={len(runs)})")
-    ax1.fill_between(steps, m_anchor - s_anchor, m_anchor + s_anchor, color="#1f77b4", alpha=0.18)
-
-    ax1.plot(steps, m_val, color="#2ca02c", marker="s", linewidth=2.0, linestyle="--", label=f"Validation (Mean, N={len(runs)})")
-    ax1.fill_between(steps, m_val - s_val, m_val + s_val, color="#2ca02c", alpha=0.18)
-
-    ax1.scatter([0], [base_greedy], color="#d62728", s=110, zorder=5, label=f"Blind Test (Base): {base_greedy:.1f}%")
-    ax1.errorbar([13.3], [mean_test_pass1], yerr=[std_test_pass1], fmt="*", color="#ff7f0e", ecolor="#ff7f0e",
-                 elinewidth=2, capsize=5, markersize=16, zorder=5, label=f"Blind Test (RLVR): {mean_test_pass1:.1f}% \u00b1 {std_test_pass1:.1f}%")
-    ax1.annotate(f"Blind Test Pass@1: {mean_test_pass1:.1f}% \u00b1 {std_test_pass1:.1f}%\nPass@4: {mean_test_pass4:.1f}% \u00b1 {std_test_pass4:.1f}%",
-                 (13.3, mean_test_pass1), textcoords="offset points", xytext=(-40, 14),
-                 bbox=dict(boxstyle="round,pad=0.35", fc="#fff2cc", ec="#d6b656", lw=1.2),
-                 arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color="#b45f06", lw=1.2))
-
-    ax1.set_title(f"Pass Rate Trajectory (Mean \u00b1 Std over {len(runs)} Seeds)", fontsize=13, fontweight="bold", pad=8)
-    ax1.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax1.set_ylabel("Pass Rate (%)", fontsize=10)
-    ax1.yaxis.set_major_formatter(ticker.PercentFormatter())
-    ax1.set_ylim(15, 100)
-    ax1.legend(loc="lower right", frameon=True, fontsize=9)
-    ax1.grid(True, linestyle=":", alpha=0.6)
-
-    # 2. 掌握度分布演变 (剪刀差与有效组)
-    ax2 = axes[0, 1]
-    m_ones, s_ones = np.mean(all_ones_arr, axis=0), np.std(all_ones_arr, axis=0)
-    m_zeros, s_zeros = np.mean(all_zeros_arr, axis=0), np.std(all_zeros_arr, axis=0)
-    m_eff, s_eff = np.mean(eff_arr, axis=0), np.std(eff_arr, axis=0)
-
-    ax2.plot(steps, m_ones, color="#2ca02c", marker="^", linewidth=2.2, label="Mastered (4/4 Solved)")
-    ax2.fill_between(steps, m_ones - s_ones, m_ones + s_ones, color="#2ca02c", alpha=0.15)
-    ax2.plot(steps, m_zeros, color="#d62728", marker="v", linewidth=2.2, label="Failed (0/4 Solved)")
-    ax2.fill_between(steps, m_zeros - s_zeros, m_zeros + s_zeros, color="#d62728", alpha=0.15)
-    ax2.plot(steps, m_eff, color="#9467bd", linestyle=":", marker="d", linewidth=1.8, label="Effective Gradient Groups (0<k<4)")
-    ax2.fill_between(steps, m_eff - s_eff, m_eff + s_eff, color="#9467bd", alpha=0.12)
-
-    ax2.set_title(f"Problem Mastery Distribution (60-Problem Pool, N={len(runs)})", fontsize=13, fontweight="bold", pad=8)
-    ax2.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax2.set_ylabel("Number of Problems", fontsize=10)
-    ax2.set_ylim(0, 60)
-    ax2.legend(loc="center right", frameon=True, fontsize=9)
-    ax2.grid(True, linestyle=":", alpha=0.6)
-
-    # 3. 梯度与优化动态
-    ax3 = axes[1, 0]
-    m_grad, s_grad = np.mean(grad_arr, axis=0), np.std(grad_arr, axis=0)
-    m_loss, s_loss = np.mean(loss_arr, axis=0), np.std(loss_arr, axis=0)
-    color_grad = "#ff7f0e"
-    ax3.plot(steps, m_grad, color=color_grad, marker="o", linewidth=2.0, label="Gradient Norm")
-    ax3.fill_between(steps, m_grad - s_grad, m_grad + s_grad, color=color_grad, alpha=0.15)
-    ax3.set_title(f"Optimization Dynamics: Gradient Norm & Loss (N={len(runs)})", fontsize=13, fontweight="bold", pad=8)
-    ax3.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax3.set_ylabel("Gradient Norm", color=color_grad, fontsize=10)
-    ax3.tick_params(axis="y", labelcolor=color_grad)
-    ax3.grid(True, linestyle=":", alpha=0.6)
-
-    ax3_twin = ax3.twinx()
-    color_loss = "#1f77b4"
-    ax3_twin.plot(steps, m_loss, color=color_loss, linestyle="--", linewidth=1.8, label="GRPO Loss")
-    ax3_twin.fill_between(steps, m_loss - s_loss, m_loss + s_loss, color=color_loss, alpha=0.12)
-    ax3_twin.set_ylabel("Token-Normalized GRPO Loss", color=color_loss, fontsize=10)
-    ax3_twin.tick_params(axis="y", labelcolor=color_loss)
-
-    # 4. KL 散度与生成长度
-    ax4 = axes[1, 1]
-    m_kl, s_kl = np.mean(kl_arr, axis=0), np.std(kl_arr, axis=0)
-    m_len, s_len = np.mean(len_arr, axis=0), np.std(len_arr, axis=0)
-    color_kl = "#8c564b"
-    ax4.plot(steps, m_kl, color=color_kl, marker="s", linewidth=2.0, label="Schulman k3 KL Divergence")
-    ax4.fill_between(steps, m_kl - s_kl, m_kl + s_kl, color=color_kl, alpha=0.15)
-    ax4.set_title(f"Policy Constraint & Output Economy (N={len(runs)})", fontsize=13, fontweight="bold", pad=8)
-    ax4.set_xlabel("Global Step (Macro-Batch)", fontsize=10)
-    ax4.set_ylabel("Base Reference KL", color=color_kl, fontsize=10)
-    ax4.tick_params(axis="y", labelcolor=color_kl)
-    ax4.grid(True, linestyle=":", alpha=0.6)
-
-    ax4_twin = ax4.twinx()
-    color_len = "#17becf"
-    ax4_twin.plot(steps, m_len, color=color_len, linestyle="-.", linewidth=1.8, label="Avg Generated Tokens")
-    ax4_twin.fill_between(steps, m_len - s_len, m_len + s_len, color=color_len, alpha=0.12)
-    ax4_twin.set_ylabel("Average Completion Length (Tokens)", color=color_len, fontsize=10)
-    ax4_twin.tick_params(axis="y", labelcolor=color_len)
-    ax4_twin.set_ylim(4, 15)
-
-    seed_labels = "42, 43, 44" if len(runs) == 3 else f"{len(runs)} Runs"
-    fig.suptitle(f"nano-GRPO: Nano Counterexample RLVR Multi-Seed Trajectory (N={len(runs)} Seeds: {seed_labels})\nQwen2.5-1.5B on NVIDIA RTX 5070 (8GB VRAM)",
-                 fontsize=14, fontweight="bold", y=0.98)
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, bbox_inches="tight")
-    print(f"✅ 多种子聚合图表已保存至: {output_path}")
+    return plot_runs(runs, output_path)
 
 
 def main():
-    args = parse_args()
-    if args.run_dir:
-        plot_single_run(args.run_dir, args.output)
-    else:
-        candidates = sorted(glob.glob("checkpoints_counterexample/20*"))
-        if not candidates:
-            raise FileNotFoundError("未在 checkpoints_counterexample 下找到任何实验目录！")
-        if len(candidates) > 1:
-            plot_multi_seed(candidates, args.output)
-        else:
-            plot_single_run(candidates[0], args.output)
-
-    # 同步至 artifact 目录便于直接查看
-    artifact_dir = "/home/littlelei/.gemini/antigravity/brain/218237f5-933f-4b03-9d64-11ef16217b00"
-    if os.path.isdir(artifact_dir):
-        artifact_target = os.path.join(artifact_dir, "training_curves.png")
-        shutil.copy2(args.output, artifact_target)
-        print(f"✅ 图表已同步至 Artifact: {artifact_target}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run_dir", action="append", help="Select run directory; repeat to compare runs")
+    parser.add_argument("--output", default="assets/training_curves.png")
+    parser.add_argument("--diagnostics_output", help="Optional separate diagnostic figure path")
+    args = parser.parse_args()
+    paths = args.run_dir or [p for p in sorted(Path("checkpoints_counterexample").glob("20*"))
+                            if (p / "final_test_report.json").is_file()]
+    plot_runs(paths, args.output, args.diagnostics_output)
 
 
 if __name__ == "__main__":
