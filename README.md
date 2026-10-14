@@ -1,58 +1,158 @@
-# nano-GRPO: Lightweight Verifiable RL (RLVR) with Macro-Batch GRPO
+# nano-GRPO
 
-<div align="center">
+轻量、可复现的可验证奖励强化学习（RLVR）练手项目：用 Qwen2.5-1.5B 和 GRPO 学习程序差分测试与反例挖掘。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch 2.x](https://img.shields.io/badge/PyTorch-2.x-red.svg)](https://pytorch.org/)
-[![Hardware: 8GB VRAM](https://img.shields.io/badge/Hardware-RTX%205070%20(8GB)-green.svg)](https://www.nvidia.com/)
 [![Model: Qwen2.5-1.5B](https://img.shields.io/badge/Model-Qwen2.5--1.5B-purple.svg)](https://huggingface.co/Qwen/Qwen2.5-1.5B)
-[![Blind Test Pass@1](https://img.shields.io/badge/Blind%20Test%20Pass%401-80.0%25%20(Base%2040.0%25)-brightgreen.svg)](#)
-[![Method: Xiaomi MiMo Paradigm](https://img.shields.io/badge/Paradigm-Xiaomi%20MiMo%20Macro--RL-red.svg)](https://mimo.xiaomi.com)
+[![Hardware: 8GB VRAM](https://img.shields.io/badge/VRAM-8GB-green.svg)](#hardware)
 
-**面向消费级硬件（8GB VRAM）构建的高效可验证奖励强化学习（RLVR）与宏步梯度累积训练系统。**  
-在程序差分测试（Differential Testing）与反例挖掘任务中，探索小参数语言模型（Qwen2.5-1.5B）如何通过纯强化学习自主掌握边界判定逻辑；在严格隔离的独立测试集上，贪心解通过率（Pass@1）实现从 **40.0% 到 80.0% 的翻倍提升**。
+模型读取两个短函数，输出使它们结果不同的输入；奖励由程序执行验证。主线实验使用 60 道训练题、20 道验证题和 20 道测试题。三个训练种子下，测试集贪心成功率从基座的 **40.0%** 提升至 **78.33% ± 2.89%**（均值 ± 样本标准差）。
 
-</div>
+[实验结果](#results) · [快速开始](#quickstart) · [演示](#demo) · [任务与奖励](#tasks) · [算法](#algorithm) · [硬件](#hardware) · [目录结构](#structure)
 
----
+<a id="results"></a>
+## 实验结果
 
-## 🏆 核心评测基准与实测结果 (Benchmark Results)
+训练种子为 42、43、44，每次训练 15 个宏步、75 次参数更新。各次实验均按验证集分数选择 `checkpoint-best`，再在同一份 20 题测试集上评测。
 
-在完全隔离、训练及超参数调优阶段未见过的 **20 道独立测试集 (Blind Test Benchmark)** 上，非学习启发式基准、基座模型（Qwen2.5-1.5B Base）与 nano-GRPO 强化学习训练策略在 3 个独立随机种子（Seed 42, 43, 44）下的评测对比如下：
+### 模型结果
 
-| 评测方法 / 模型策略 | 机制与采样预算 | 独立测试集 Pass@1 (Greedy) | 独立测试集 Pass@4 (Sampling) | 候选单点命中率 (Hit Rate) |
-| :--- | :--- | :---: | :---: | :---: |
-| **纯随机探测 (Random Search)** | 离散定义域均匀随机采样 | 5.0% (1/20) | 15.0% (3/20) | 6.25% (5/80) |
-| **AST 常量优先启发式 (Literal-First)** | 静态解析提取代码常数 $c$，优先探测 $\{c \pm 1\}$ | 65.0% (13/20) | 95.0% (19/20) | 27.50% (22/80) |
-| **基座模型 (Qwen2.5-1.5B Base)** | 零样本贪心 / 随机采样 ($T=0.7$) | 40.0% (8/20) | 60.0% (12/20) | 40.00% (8/20) |
-| **nano-GRPO 策略 (Seed 42)** | 验证集选模最佳检查点 (Step 12) | 80.0% (16/20) | 85.0% (17/20) | 76.25% (61/80) |
-| **nano-GRPO 策略 (Seed 43)** | 验证集选模最佳检查点 (Step 13) | 80.0% (16/20) | 85.0% (17/20) | 71.25% (57/80) |
-| **nano-GRPO 策略 (Seed 44)** | 验证集选模最佳检查点 (Step 15) | 75.0% (15/20) | 85.0% (17/20) | 77.50% (62/80) |
-| **nano-GRPO 综合表现 ($N=3$ 均值 $\pm$ 标准差)** | **3 轮独立训练综合统计** | **78.33% $\pm$ 2.89%** | **85.00% $\pm$ 0.00%** | **75.00% $\pm$ 3.31%** |
+| 模型 / 训练种子 | 最佳宏步 | 贪心 Pass@1 | 采样 Pass@4 | 采样候选命中率 |
+| --- | ---: | ---: | ---: | ---: |
+| Qwen2.5-1.5B Base | — | 40.0%（8/20） | — | — |
+| GRPO · Seed 42 | 12 | 80.0%（16/20） | 85.0%（17/20） | 76.25%（61/80） |
+| GRPO · Seed 43 | 13 | 80.0%（16/20） | 85.0%（17/20） | 71.25%（57/80） |
+| GRPO · Seed 44 | 15 | 75.0%（15/20） | 85.0%（17/20） | 77.50%（62/80） |
+| **三次训练的均值 ± 标准差** | — | **78.33% ± 2.89%** | **85.00% ± 0.00%** | **75.00% ± 3.31%** |
 
-> **关键实验结论与学术分析**：
-> 1. **反例稀疏性与纯随机失效**：反例在输入空间中高度稀疏（平均单点稀疏度 $\le 2\%$），纯随机搜索难以命中（Pass@4 仅 15.0%）；
-> 2. **符号启发式 vs 神经网络**：AST 常量启发式具备直接读取抽象语法树常数节点的能力，在显式包含阈值（如 `x < 38`）的题目上表现优异；但大语言模型未接入任何 AST 外部工具，仅面对纯文本代码 token；
-> 3. **稳健的强化学习提升**：通过纯 RLVR 宏步训练，1.5B 模型在 3 轮独立随机种子下均展现了高度一致的收敛行为，确定性贪心通过率从基座的 **40.0% 稳步倍增至 78.33% $\pm$ 2.89%**，采样 Pass@4 在所有种子上均稳定收敛至 **85.0% (17/20)**，证明模型习得了针对控制流差异的自适应边界聚焦能力，具备坚实的统计复现性。完整多轮实验记录详见 [multiseed_counterexample_report.json](file:///home/littlelei/github/nano-GRPO/reports/multiseed_counterexample_report.json)。
+- **贪心 Pass@1**：每题生成一个确定性回答，统计解决题数。
+- **采样 Pass@4**：每题采样四个回答，至少一个成功即算该题解决；采样温度为 `0.7`。
+- **采样候选命中率**：80 个采样回答中成功回答的比例。
 
-<div align="center">
-  <img src="./assets/training_curves.png" width="95%" alt="nano-GRPO Training Trajectory">
-</div>
+完整记录：[多种子实验报告](./reports/multiseed_counterexample_report.json)。上表的 Base 采样指标未包含在该汇总报告中，因此留空。
 
-*图注：基于 3 轮独立随机种子（Seed 42, 43, 44，每轮 15 宏步 / 75 次参数更新）的训练动力学全景（实线为均值，阴影带为 $\pm 1\sigma$ 标准差）。左上：训练集与验证集通过率跃升，最终盲测大考稳定收敛至 78.3% $\pm$ 2.9%（采样 Pass@4 达 85.0%）；右上：全错（All-Zero）与全对（All-One）题目的剪刀差收敛与有效梯度探索组演化；左下：优化器平稳梯度范数与 Token 归一化 GRPO 损失收敛；右下：参考基座策略 KL 散度与紧凑 Token 生成长度（全程稳定在 6~7 Tokens，无长度膨胀）。*
+### 非学习基线
 
----
+| 方法 | 一次尝试成功率 | 四次尝试成功率 | 四次尝试的候选命中率 |
+| --- | ---: | ---: | ---: |
+| 随机探测 | 5.0%（1/20） | 15.0%（3/20） | 6.25%（5/80） |
+| AST 常量优先启发式 | 65.0%（13/20） | 95.0%（19/20） | 27.50%（22/80） |
 
-## 🔬 交互式差分测试演示 (Interactive Differential Testing Demo)
+启发式从代码中提取常量并探测常量及邻域。它在四次尝试下优于当前模型；本项目展示的是 GRPO 相对于模型自身基线的学习提升。完整记录：[基线评测报告](./reports/counterexample_baselines_report.json)。
 
-执行交互脚本，可从独立测试集中抽选样例，直观比对基座策略与强化学习策略的执行结果：
+> 当前结果来自小型合成基准。三个训练种子的标准差描述本次实验的波动，不等同于大规模泛化结论或置信区间；测试题之间也可能共享程序模板。
+
+![三个训练种子的训练曲线](./assets/training_curves.png)
+
+*实线为均值，阴影为 ±1 个标准差。图中依次展示成功率、奖励组分布、损失与梯度、KL 与生成长度。*
+
+<a id="quickstart"></a>
+## 快速开始
+
+### 1. 获取项目并安装依赖
+
+```bash
+git clone https://github.com/littlelei0103/nano-GRPO.git
+cd nano-GRPO
+
+conda create -n nano-grpo python=3.11 -y
+conda activate nano-grpo
+pip install -r requirements.txt
+```
+
+### 2. 运行测试
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+测试覆盖损失计算、梯度累积、断点恢复、重采样和差分判题。
+
+### 3. 训练主线任务
+
+```bash
+python train_mimo.py \
+  --task counterexample \
+  --global_steps 15 \
+  --anchor_size 60 \
+  --problems_per_update 12 \
+  --group_size 4 \
+  --micro_batch_size 2 \
+  --max_new_tokens 32 \
+  --lr 2e-5 \
+  --seed 42
+```
+
+每个宏步覆盖全部 60 道训练题，打乱后每 12 题更新一次参数。检查点保存到 `checkpoints_counterexample/<run-id>/`；控制台会打印实际实验目录。
+
+### 4. 恢复训练
+
+将下面变量替换为控制台打印的实验目录。续训时保持原实验的任务、种子和关键超参一致。
+
+```bash
+TASK_RUN_DIR="checkpoints_counterexample/替换为实际run-id"
+python train_mimo.py \
+  --task counterexample \
+  --resume_checkpoint "$TASK_RUN_DIR/checkpoint-last" \
+  --global_steps 25 \
+  --seed 42
+```
+
+`--resume_checkpoint` 恢复权重、优化器、训练进度和 RNG 状态；`--init_adapter` 仅以已有 LoRA 权重初始化新实验。数据或判题指纹改变后，旧实验不能按原状态精确续训。
+
+### 5. 其他训练方式
+
+```bash
+# 流式训练：每题执行一次参数更新
+python train.py --task counterexample --total_steps 100 --lr 2e-5
+
+# 差分缺陷审计：输出输入参数，由环境计算正确结果
+python train_mimo.py \
+  --task bug_differential \
+  --save_dir checkpoints_differential \
+  --global_steps 15 \
+  --problems_per_update 12 \
+  --max_new_tokens 200
+
+# 用 Counterexample 权重初始化差分任务的新实验
+python train_mimo.py \
+  --task bug_differential \
+  --init_adapter "$TASK_RUN_DIR/checkpoint-best" \
+  --save_dir checkpoints_transfer \
+  --max_new_tokens 200
+```
+
+扩展任务的生成长度需要单独验证。Counterexample 的短输出配置与硬件测量不能直接套用到长代码审计任务。
+
+<a id="demo"></a>
+## 交互式演示
+
+先完成训练，再运行：
 
 ```bash
 python demo.py --num_cases 3
+
+# 也可指定检查点
+python demo.py --checkpoint "$TASK_RUN_DIR/checkpoint-best" --num_cases 3
 ```
 
-**控制台实测输出快照（覆盖单点比较偏差、区间端点包含、极值截断等不同难度梯队）：**
+演示并排展示程序对、Base 与训练后模型的输入，以及执行结果。例如：
+
+```python
+def f_a(x):
+    return x < 38
+
+def f_b(x):
+    return x <= 38
+```
+
+输入 `39` 时两个程序都返回 `False`；输入 `38` 时返回值不同，成功找到反例。
+
+<details>
+<summary>展开查看完整终端输出样例</summary>
+
 ```text
 ========================================================================
 nano-GRPO: Program Differential Testing & Counterexample Mining Demo
@@ -114,184 +214,164 @@ Domain: [0, 50] | Counterexamples: [26, 27, 28, 29, 30, 31] (Sparsity: 49.02%)
 ========================================================================
 ```
 
----
+</details>
 
-## 🌟 任务建模与可验证奖励环境 (Verifiable RL Environment)
+<a id="tasks"></a>
+## 任务与可验证奖励
 
-`bug_differential` 的返回值通过带类型标记的 JSON 传输，支持 `None`、布尔、整数、浮点、字符串、bytes，以及嵌套的 list、tuple、dict、set、frozenset。比较规则在所有嵌套层级严格区分类型，忽略字典和集合顺序；浮点使用 `rel_tol=abs_tol=1e-7`，NaN 与 NaN 视为等价，无穷值保留符号。自定义对象和超过 64 层的容器不在返回值契约内，序列化失败不会获得差分奖励。这些规则定义了本任务的正确性标准。
+### Counterexample：程序差分反例挖掘
 
-动态重采样强制与原策略同温，`--resample_temp_boost` 仅保留兼容值 `0.0`。日志中的 `initial_pass_rate` 统计初次采样，`anchor_pass_rate` 统计最终保留组，`overall_rollout_pass_rate` 统计全部尝试。`total_tokens_generated` 逐次累计所有候选的有效补全 token（含 EOS、不含 padding），`retained_tokens_generated` 只计最终用于更新的样本。成功筛选会改变训练样本分布，因此重采样属于实验功能；比较效率时应采用全部尝试的候选和 token 预算。
+给定程序对，模型输出使两个返回值不同的输入。生成器离线枚举输入域，确认反例存在并记录反例稀疏度。
 
-### 1. 为什么选择程序差分测试（Differential Testing）？
-* **规避奖励作弊与模型幻觉**：自然语言推理任务易受 Reward Model 欺骗（Reward Hacking）。在差分测试环境中，真理完全由 Python 原生执行器裁决：给定程序对 $(f_A, f_B)$，判题系统直接验证 $f_A(x) \neq f_B(x)$，具备确定性与零幻觉特性。
-* **规避预期值心算开销**：传统代码测试任务强制模型生成断言并自主推导预期输出（如 `assert f(x) == expected`），小模型容易因心算错误被惩罚。差分任务仅需模型定位边界输入 $x$，输出序列极短（8 ~ 32 tokens）。
-* **可量化难度阶梯与反例稀疏度**：
-  * **Level 1 (边界条件与单点偏差)**：比较运算符偏差（如 `x < c` vs `x <= c`），反例在离散域中高度稀疏（单点稀疏度约 1.96%）；
-  * **Level 2 (区间裁剪与截断差异)**：区间端点与极值函数截断（如 `min(x, c)` vs `min(x, c + 1)`），稀疏度 3% ~ 10%；
-  * **Level 3 (周期取模与分段逻辑)**：周期性取模偏移与多分支逻辑判断。
+| 难度 | 示例 |
+| --- | --- |
+| Level 1 | 比较运算符的边界差异，如 `<` 与 `<=` |
+| Level 2 | 区间端点、裁剪与极值函数差异 |
+| Level 3 | 周期取模与分段逻辑 |
+| 可选 2D 扩展 | 二元输入、几何边界与分段条件 |
 
 ```mermaid
 flowchart TD
-    A["输入: 任务规格 Spec + 程序对 (f_A, f_B)"] --> B["策略模型定位边界输入 (8~32 Tokens)<br/>输出格式: &lt;input&gt;INTEGER&lt;/input&gt;"]
-    B --> C["确定性沙盒并行执行: f_A(x) 与 f_B(x)"]
-    C -->|f_A(x) != f_B(x)| D["命中差分反例 (Divergence)<br/>Reward = +1.0"]
-    C -->|f_A(x) == f_B(x)| E["输出一致 (No Divergence)<br/>Reward = 0.0"]
+    A["任务规格与两个短函数"] --> B["模型输出候选输入 x"]
+    B --> C["环境执行 f_A(x) 与 f_B(x)"]
+    C --> D{"返回值是否不同？"}
+    D -->|是| E["Reward = 1"]
+    D -->|否| F["Reward = 0"]
 ```
 
----
+### 扩展任务
 
-## ⚡ 核心算法与系统架构
+- **`bug_differential`**：阅读规格和缺陷代码，仅输出参数字面量；环境执行 Golden 与 Buggy 实现，检查输入是否合法、行为是否不同。
+- **`bug_hunter`**：生成 `assert target_func(...) == expected`，同时验证正确结果与漏洞暴露能力。
+- **`code_exec`**：生成函数代码，由受限执行器运行测试。执行器支持的 Python 子集见 [code_worker.py](./tasks/code_worker.py)。
 
-### 1. 组相对优势估计 (Group Relative Advantage Estimation)
-针对单个输入 prompt，采样 $G$ 路候选回答，经沙盒执行获得标量奖励序列 $R = [R_1, \dots, R_G]$。组内标准化优势定义为：
+`bug_differential` 通过带类型标记的 JSON 传输返回值。支持 `None`、布尔、整数、浮点、字符串、bytes，以及嵌套的 list、tuple、dict、set、frozenset。比较在所有层级区分类型、忽略字典与集合顺序；浮点使用相对和绝对容差 `1e-7`，NaN 与 NaN 视为等价，无穷值保留符号。自定义对象和超过 64 层的容器不在返回值契约内，序列化失败不获得差分奖励。
+
+### 实验性动态重采样
+
+宏步引擎支持 `--dynamic_resampling`。初始组全错时，在限定次数内追加探索，尝试获得有奖励差异的组。重采样强制与原策略同温，`--resample_temp_boost` 仅接受兼容值 `0.0`。
+
+| 日志指标 | 统计范围 |
+| --- | --- |
+| `initial_pass_rate` | 初次采样 |
+| `anchor_pass_rate` | 最终保留组 |
+| `overall_rollout_pass_rate` | 包含重采样的全部尝试 |
+| `total_tokens_generated` | 全部生成的有效补全 token，含 EOS、不含 padding |
+| `retained_tokens_generated` | 最终用于更新的样本 token |
+
+成功筛选会改变训练样本分布。比较重采样效率时，采用全部尝试的候选数与 token 预算。
+
+<a id="algorithm"></a>
+## 算法与更新方式
+
+### 组相对优势
+
+每题采样 G 个候选，计算组内标准化优势。当前实现使用 PyTorch 的样本标准差：
 
 $$
-A_i = \frac{R_i - \mu_R}{\sigma_R + \epsilon}, \quad \mu_R = \frac{1}{G}\sum_{j=1}^G R_j, \quad \sigma_R = \sqrt{\frac{1}{G}\sum_{j=1}^G (R_j - \mu_R)^2}
+A_i = \frac{R_i - \mu_R}{s_R + \epsilon}, \qquad
+\mu_R = \frac{1}{G}\sum_{j=1}^{G}R_j, \qquad
+s_R = \sqrt{\frac{1}{G-1}\sum_{j=1}^{G}(R_j-\mu_R)^2}
 $$
 
-**零方差过滤保护 (Zero-Variance Guard)**：当整组候选全对或全错时（ $\sigma_R < 10^{-6}$ ），主动跳过策略梯度反传，避免无效梯度扰动。
+全对或全错的组没有奖励优势信号。开启 KL 时，这些组仍可贡献参考策略正则项；KL 为零时跳过其反传。
 
-### 2. 无偏基座参考策略 KL 正则化 (Schulman k3 Estimator)
-使用 PEFT 动态禁用 LoRA 适配器（`disable_adapter()`）直接获取基座模型的真实参考对数概率 $\log \pi_{\mathrm{ref}}$，无需加载双份模型权重，显著节约显存。  
-采用高精度非负 Schulman k3 近似估计器：
+### 基座参考 KL 正则
 
-$$
-D_{\mathrm{KL}}^{\mathrm{approx}} = \frac{\exp(\Delta) - 1 - \Delta}{\tau^2}, \quad \Delta = \log \pi_\theta(y_t|x, y_{<t}) - \log \pi_{\mathrm{ref}}(y_t|x, y_{<t})
-$$
-
-在 FP32 精度下通过 `torch.expm1` 计算，避免半精度浮点消减误差，确保策略优化不会脱离基座语言流利度约束。
-
-### 3. 宏步梯度累积与子批次参数更新 (Macro-Batch Scheduling)
-* **固定锚点池重锚定**：构建包含 60 道题目的固定训练集池（Anchor Pool）。每轮全局步（Global Step）前随机重排题目次序。
-* **子批次增量更新**：设置 `problems_per_update=12`，将全池划分为 5 组子批次。在每个子批次内累积多题梯度后触发参数更新，兼顾高频参数更新与全题库探索覆盖。
-* **严格 Token 级与题目级两级归一化**：损失计算对显存微批次（`micro_batch_size`）划分严格保持数学不变：
+通过 PEFT 的 `disable_adapter()` 获取基座参考概率，复用模型权重。采样、当前策略和参考策略的 logprob 使用相同温度。代码中的 k3 项为：
 
 $$
-\mathcal{L}_{\mathrm{update}} = \frac{1}{M} \sum_{m=1}^M \frac{\sum_{t} \mathcal{L}_{m, t} \cdot \mathrm{mask}_{m, t}}{\sum_{t} \mathrm{mask}_{m, t} + \epsilon}
+\Delta_t = \log \pi_{\mathrm{ref}}(y_t \mid x,y_{<t})
+           - \log \pi_\theta(y_t \mid x,y_{<t})
 $$
 
----
+$$
+k_{3,t} = \exp(\Delta_t) - 1 - \Delta_t
+$$
 
-## 📊 三相纯净数据集划分 (`tasks/data/counterexample_dataset.json`)
+实现使用 FP32 `expm1` 并将微小负舍入值截为零；没有额外除以温度平方。
 
-| 数据集分划 | 题目规模 | 采样配置 | 用途与隔离规范 |
-| :--- | :---: | :---: | :--- |
-| **Train 训练锚点池** | 60 题 | $G=4$ 探索候选 | 强化学习探索与策略梯度迭代。 |
-| **Validation 验证集** | 20 题 | 确定性贪心解码 | 评估泛化进展，筛选并持久化 `checkpoint-best`。 |
-| **Test 独立测试集** | 20 题 | 贪心 Pass@1 / 采样 Pass@4 | **全流程严格隔离**，零参与训练与超参选择，仅在训练结束执行最终无偏评测。 |
+### 子批次更新与微批次累积
 
-*注：三者题目 ID、程序对及特征参数交集严格为 0。*
+每轮打乱训练池，将其切分为 `problems_per_update` 大小的题目批次。每题先按整组有效补全 token 数归一化，再按本次更新的题目数平均：
 
----
+$$
+\mathcal{L}_{\mathrm{update}}
+= \frac{1}{M}\sum_{q=1}^{M}
+  \frac{\sum_{i=1}^{G}\sum_t m_{q,i,t}\,\ell_{q,i,t}}
+       {\sum_{i=1}^{G}\sum_t m_{q,i,t}+\epsilon}
+$$
 
-## 💻 显存优化与硬件要求
+这里 M 是本次更新的题目数，m 是有效 token 掩码，ℓ 是 PPO-Clip 策略损失与 KL 正则之和。`micro_batch_size` 控制单次前向、反传的候选数，归一化分母仍覆盖整题的全部候选。
 
-本项目专为消费级硬件优化，在 **RTX 5070 Laptop GPU (8GB VRAM)** 环境下实测指标如下：
+<a id="dataset"></a>
+## 数据与评测划分
 
-* **静态显存占用**：基座模型（Qwen2.5-1.5B, bfloat16）+ LoRA 适配器约 **2980 MB**。
-* **动态峰值显存**：并发生成（$G=4$）、KV Cache、参考模型前向与反向传播峰值显存占用为 **3379 MB**（低于 4.2 GB 显存安全水位）。
-* **单轮耗时**：全套 15 轮宏步（3,600 次推理生成与 75 次优化器更新）耗时约 **20 分钟**。
+主线数据见 [counterexample_dataset.json](./tasks/data/counterexample_dataset.json)。
 
----
+| 划分 | 规模 | 用途 |
+| --- | ---: | --- |
+| Train | 60 题 | 强化学习采样与更新 |
+| Validation | 20 题 | 贪心评测，选择 `checkpoint-best` |
+| Test | 20 题 | 训练结束后评测 Base、Best 与 Last |
 
-## ⚡ 快速开始与复现
+训练不使用测试集选择检查点。合成程序对去重后进行划分；这不保证程序模板或所有常量跨划分互不重叠。
 
-### 1. 环境准备
-```bash
-# 激活 Conda 环境并安装依赖
-conda create -n nano-grpo python=3.11 -y
-conda activate nano-grpo
-pip install -r requirements.txt
-```
+<a id="hardware"></a>
+## 硬件与耗时
 
-### 2. 运行单元测试套件
-```bash
-# 运行涵盖算法损失、梯度累积、两级归一化、动态重采样与差分判题的完整回归测试 (59 项测试)
-python -m unittest discover tests/ -v
-```
+以下为 Counterexample 短输出配置在 RTX 5070 Laptop GPU（8GB）上的测量，使用 Qwen2.5-1.5B、BF16、LoRA 与梯度检查点。
 
-### 3. 启动强化学习训练
+| 项目 | 测量值 |
+| --- | --- |
+| 模型加载后的显存占用 | 约 2,980 MiB |
+| 训练峰值 allocated 显存 | 约 3,379 MiB |
+| 配置 | 每题 4 个候选，微批次 2，最多 32 个生成 token |
+| 完整训练耗时 | 15 宏步、75 次更新，约 20 分钟 |
 
-```bash
-# 模式一: 推荐——Nano Counterexample 宏步强化学习训练 (15 轮宏步，75 次参数更新)
-python train_mimo.py --task counterexample --global_steps 15 --problems_per_update 12 --lr 2e-5
+这些测量对应短序列任务；显存会随 prompt、补全长度和微批次大小变化。
 
-# 模式二: 在线流式微步探索 (每题立即更新优化器)
-python train.py --task counterexample --total_steps 100 --lr 2e-5
-
-# 模式三: 差分缺陷审计拓展任务 (方向 C: 输入差分执行，沙盒真值判题)
-python train_mimo.py --task bug_differential --global_steps 15 --problems_per_update 12
-
-# 模式四: 跨任务适配器热启动迁移 (方向 B: 加载 Counterexample 权重微调)
-python train_mimo.py --task bug_differential --init_adapter checkpoints_counterexample/<run-id>/checkpoint-best
-
-# 断点恢复与精确续训 (自动校验超参、恢复优化器动量与 RNG 随机状态)
-python train_mimo.py --resume_checkpoint ./checkpoints_counterexample/<run-id>/checkpoint-last --global_steps 25
-```
-
-### 4. 运行交互式对比演示
-```bash
-# 查看独立测试集上的前瞻对比
-python demo.py --num_cases 3
-```
-
----
-
-## 📂 模块化代码库结构
+<a id="structure"></a>
+## 目录结构
 
 ```text
 nano-GRPO/
-├── trainer/
-│   ├── mimo_engine.py         # 宏步梯度累积强化学习引擎 (Macro-Batch RLVR)
-│   ├── engine.py              # 在线流式 GRPO 训练引擎 (Online Streaming)
-│   ├── grpo_loss.py           # GRPO 目标函数、无偏基座 KL 与两级 Token 归一化
-│   ├── utils.py               # 显存守护、LoRA 挂载、状态持久化与恢复
-│   ├── experiment.py          # 实验生命周期、配置校验与断点恢复管理器
-│   ├── evaluation.py          # 评测协议 (Greedy Pass@1 与 采样 Pass@k)
-│   └── run.py                 # 统一执行流程调度
-├── tasks/
-│   ├── counterexample.py      # 主线任务: 差分程序反例挖掘环境与三级难度合成器
-│   ├── bug_differential.py    # 扩展任务: 基于输入差分执行的程序缺陷审计轨道 (方向 C)
-│   ├── semantic_values.py     # 类型安全的跨进程对象序列化与深度值判等器
-│   ├── counterexample_2d.py   # 2D 几何边界与高维反例扩展生成器
-│   ├── bug_hunter.py          # 挑战任务: 变异代码反例审计与双向沙盒执行器
-│   ├── base.py                # Task 抽象协议
+├── trainer/                 # 损失、训练引擎、评测与检查点
+│   ├── grpo_loss.py
+│   ├── engine.py            # 每题更新
+│   ├── mimo_engine.py       # 按题目子批次更新
+│   ├── evaluation.py
+│   ├── experiment.py
+│   ├── utils.py
+│   └── run.py
+├── tasks/                   # 任务、判题器与数据生成
+│   ├── counterexample.py    # 主线任务与可选 2D 生成器
+│   ├── bug_differential.py
+│   ├── bug_hunter.py
+│   ├── code_exec.py
+│   ├── code_worker.py
+│   ├── semantic_values.py
+│   ├── contracts.py
+│   ├── base.py
 │   └── data/
-│       ├── counterexample_dataset.json  # 差分测试三相基准题库 (Train 60, Val 20, Test 20)
-│       └── bug_hunter_dataset.json      # BugHunter 三相代码审计题库
-├── assets/
-│   └── training_curves.png    # 300 DPI 出版级 4 栏训练动力学曲线图
-├── scripts/
-│   ├── plot_metrics.py        # 训练全景曲线自动生成脚本
-│   ├── benchmark_multimetric.py # 多维度指标离线批量评估工具
-│   ├── evaluate_differential_transfer.py # 差分缺陷审计基线与迁移零样本评测
-│   └── evaluate_counterexample_baselines.py # 随机与 AST 常量启发式基准评测
-├── tests/
-│   ├── test_counterexample.py       # 反例生成与启发式单测
-│   ├── test_counterexample_2d.py    # 2D 几何高维反例单测
-│   ├── test_bug_differential.py     # 输入差分判题与类型序列化单测
-│   ├── test_dynamic_resampling.py   # 动态零方差重采样同温对齐单测
-│   ├── test_init_adapter.py         # 跨任务迁移适配器初始化单测
-│   ├── test_overhaul.py             # 核心算法与沙盒回归单测
-│   └── test_review_regressions.py   # 续训断点与分批更新单测
-├── demo.py                    # 终端交互式双模对抗演示脚本
-├── train_mimo.py              # 宏步强化学习主入口
-├── train.py                   # 流式微步强化学习主入口
-└── requirements.txt           # 项目依赖清单
+├── scripts/                 # 诊断、基线评测与绘图
+├── tests/                   # 回归测试
+├── reports/                 # 可查阅的实验报告
+├── assets/                  # 训练曲线
+├── demo.py
+├── train_mimo.py
+├── train.py
+└── requirements.txt
 ```
 
----
+主要入口：[宏步训练](./train_mimo.py)、[流式训练](./train.py)、[损失实现](./trainer/grpo_loss.py)、[多种子汇总](./scripts/consolidate_multiseed_report.py)、[绘图](./scripts/plot_metrics.py)。模型检查点不随 Git 仓库分发，演示需要先训练或提供兼容的本地适配器。
 
-## 🙏 灵感来源 (Acknowledgments & Citations)
+## 灵感来源
 
-本项目在算法架构与工程设计过程中，深度吸收了以下前沿技术报告与学术成果的思想：
+- [DeepSeekMath](https://arxiv.org/abs/2402.03300)：GRPO 算法。
+- [DeepSeek-R1](https://arxiv.org/abs/2501.12948)：可验证奖励的强化学习实践。
+- [Xiaomi MiMo](https://mimo.xiaomi.com)：宏步调度的工程灵感。
 
-1. **Xiaomi MiMo 训练范式**：本项目的宏步调度架构（Macro-Batch Scheduling）与固定锚点题库迭代机制，灵感源自小米大模型团队在强化学习推理中的工程实践（[Xiaomi MiMo](https://mimo.xiaomi.com)），将单题即时更新升级为跨题库的子批次梯度累积更新，大幅提升了小参数模型策略梯度的信噪比。
-2. **DeepSeek-Math & DeepSeek-R1**：组相对策略优化（GRPO）算法框架、无偏基座参考策略 KL 散度近似估计器（Schulman k3 形式）以及可验证奖励强化学习（RLVR）原则。
-3. **Dr. GRPO**：关于显存微批次切分下 Token 级归一化对累积梯度的数学不变性推导。
+## 许可证
 
----
-
-## 📄 开源许可证 (License)
-
-本项目采用 [MIT License](./LICENSE) 开源。欢迎学术探讨与技术交流！
+本项目采用 [MIT License](./LICENSE)。
