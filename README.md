@@ -3,14 +3,13 @@
 # ⚡ nano-GRPO
 
 **Minimal, Reproducible RLVR for Program Differential Testing & Counterexample Mining**  
-*用 Qwen2.5-1.5B 与 GRPO 从零训练“代码边界反例猎手”*
+*用 Qwen2.5-1.5B 与 GRPO 从零训练“代码边界反例挖掘”*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch 2.x](https://img.shields.io/badge/PyTorch-2.x-red.svg)](https://pytorch.org/)
 [![Model: Qwen2.5-1.5B](https://img.shields.io/badge/Model-Qwen2.5--1.5B-purple.svg)](https://huggingface.co/Qwen/Qwen2.5-1.5B)
 [![VRAM: ~3.4 GB](https://img.shields.io/badge/Peak_VRAM-~3.4_GB-success.svg)](#hardware)
-[![Tests: 59 Passing](https://img.shields.io/badge/Tests-59_passed-brightgreen.svg)](./tests)
 
 **[🇨🇳 中文说明](./README.md) | [🇬🇧 English Documentation](./README_en.md)**
 
@@ -22,7 +21,7 @@
 
 ## 🎯 项目简介
 
-在软件测试中，两个看似等价的程序往往只在极少数的**边界条件（Corner Cases）**下产生行为分歧（例如 `<` 与 `<=` 的 Off-by-one 误差、开闭区间端点、分段阈值或极值截断）。
+在软件测试中，两个看似等价的程序往往只在极少数的**边界条件（Corner Cases）** 下产生行为分歧（例如 `<` 与 `<=` 的 Off-by-one 误差、开闭区间端点、分段阈值或极值截断）。
 
 **`nano-GRPO`** 是一个面向单张消费级显卡（8GB VRAM，峰值仅需 **~3.4 GB**）的可验证奖励强化学习（RLVR, Reinforcement Learning with Verifiable Rewards）实战项目：
 - **输入**：两个行为高度相似的 Python 函数 `f_a(x)` 与 `f_b(x)`；
