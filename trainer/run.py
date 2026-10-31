@@ -71,6 +71,7 @@ def run_training(args, macro=False):
     if macro:
         trainer_kwargs["problems_per_update"] = getattr(args, "problems_per_update", 12)
         trainer_kwargs["seed"] = getattr(args, "seed", 42)
+        trainer_kwargs["total_global_steps"] = getattr(args, "global_steps", 0)
     trainer = trainer_cls(**trainer_kwargs)
     selection = initial_selection()
     completed = 0

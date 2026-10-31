@@ -33,6 +33,8 @@ def parse_args():
                         help="展示对比的测试集题目数量 (默认 3)")
     parser.add_argument("--prob_idx", type=int, default=-1,
                         help="指定评测的题目索引 (0~19)，若指定则仅对比该题")
+    parser.add_argument("--include_2d", action="store_true",
+                        help="包含 Level 4 二元几何边界 (2D) 挑战题展示")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="运行设备")
     return parser.parse_args()
@@ -85,8 +87,16 @@ def main():
         if len(chosen) < args.num_cases:
             chosen.extend([p for p in test_problems if p not in chosen][:args.num_cases])
         selected_problems = chosen[:args.num_cases]
+        if args.include_2d:
+            from tasks.counterexample import generate_2d_manhattan_problems
+            rng_2d = random.Random(42)
+            p_2d = generate_2d_manhattan_problems(rng_2d, 1)
+            if p_2d:
+                selected_problems.append(p_2d[0])
 
     cfg = rollout_generation_config(tokenizer, max_new_tokens=24, temperature=0.7, do_sample=False)
+    base_wins = 0
+    rl_wins = 0
 
     for case_no, prob in enumerate(selected_problems, 1):
         f_a = prob["func_a_src"]
@@ -133,6 +143,10 @@ def main():
         print(f"{'─'*72}")
 
         # 结果判定
+        if diff_base:
+            base_wins += 1
+        if diff_rl:
+            rl_wins += 1
         status_base = f"{GREEN}Divergence Confirmed (+1.0){RESET}" if diff_base else f"{RED}Outputs Match (0.0){RESET}"
         status_rl = f"{GREEN}Divergence Confirmed (+1.0){RESET}" if diff_rl else f"{RED}Outputs Match (0.0){RESET}"
 
@@ -146,7 +160,12 @@ def main():
         print(f"  f_B{arg_str_base:<16s} = {str(res_b_base):<8s} │  f_B{arg_str_rl:<16s} = {str(res_b_rl)}")
         print(f"  Verification: {status_base:<31s} │  Verification: {status_rl}")
 
-    print(f"\n{'='*72}\n")
+    total_shown = max(1, len(selected_problems))
+    print(f"\n{'='*72}")
+    print(f"{BOLD}📊 Demo Scoreboard ({len(selected_problems)} Cases Evaluated){RESET}")
+    print(f"  • Zero-Shot Base Policy  : {base_wins}/{len(selected_problems)} ({base_wins/total_shown:.1%})")
+    print(f"  • RLVR Optimized Policy  : {GREEN}{BOLD}{rl_wins}/{len(selected_problems)} ({rl_wins/total_shown:.1%}){RESET}")
+    print(f"{'='*72}\n")
 
 
 if __name__ == "__main__":

@@ -14,12 +14,13 @@ trainer/mimo_engine.py - 基于宏步梯度累积的可验证奖励强化学习�
      反向传播损失先在各题目序列有效 Token 上归一化，再按子批次题目数做均匀平均，确保损失与梯度对微批次大小严格不变。
 """
 
+import math
 import os
 import random
 from collections import defaultdict
 import torch
 import torch.nn.functional as F
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from trainer.grpo_loss import (
     compute_completion_mask,
@@ -30,6 +31,21 @@ from trainer.grpo_loss import (
     generate_with_policy
 )
 from trainer.utils import print_gpu_memory
+
+
+def _boundary_proximity_score(val: Any, prob: Dict[str, Any]) -> float:
+    """
+    计算未命中反例但在定义域内的合法输入 val 到最近真实反例集合的邻近度得分 ∈ (0, 0.2)。
+    仅用于在全部采样均未直接命中反例 (all < 1.0) 时打破零方差死锁，引导策略向真实分歧点靠拢；
+    不会改变 solved (reward >= 1.0) 判定。
+    """
+    if val is None or not isinstance(val, int):
+        return 0.0
+    ces = prob.get("counterexamples", [])
+    if not ces or not isinstance(ces[0], int):
+        return 0.0
+    min_dist = min(abs(val - ce) for ce in ces)
+    return round(0.2 / (1.0 + min_dist), 4)
 
 
 class MiMoGRPOTrainer:
@@ -56,13 +72,15 @@ class MiMoGRPOTrainer:
         seed: int = 42,
         dynamic_resampling: bool = False,
         max_resample_rounds: int = 2,
-        resample_temp_boost: float = 0.0
+        resample_temp_boost: float = 0.0,
+        total_global_steps: int = 0
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.task = task
 
         self.lr = lr
+        self.total_global_steps = total_global_steps
         self.group_size = group_size
         self.micro_batch_size = min(micro_batch_size, group_size)
         self.kl_coef = kl_coef
@@ -175,9 +193,19 @@ class MiMoGRPOTrainer:
         chunks = [shuffled_problems[i : i + chunk_size] for i in range(0, num_problems, chunk_size)]
         total_updates = len(chunks)
 
+        # 余弦退火学习率调度 (仅在指定 total_global_steps > 5 且进入中后期时平滑退火至 0.25 * lr，防后期过拟合与 KL 漂移)
+        if self.total_global_steps > 5 and global_step_idx > 5:
+            progress = min(1.0, (global_step_idx - 5) / max(1, self.total_global_steps - 5))
+            cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+            cur_lr = self.lr * (0.25 + 0.75 * cosine_factor)
+        else:
+            cur_lr = self.lr
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = cur_lr
+
         print(
             f"\n[Global Step {global_step_idx:02d}] 锚点池规模: {num_problems} | "
-            f"子批次大小: {chunk_size} | 本轮参数更新次数: {total_updates}",
+            f"子批次大小: {chunk_size} | 本轮参数更新次数: {total_updates} | LR: {cur_lr:.2e}",
             flush=True
         )
 
@@ -257,6 +285,11 @@ class MiMoGRPOTrainer:
                     if self.dynamic_resampling and all(r < 1.0 for r in rewards_list):
                         # 保持重采样温度与基准策略一致，避免跨温度分布失真
                         resample_cfg = self.generation_config
+                        best_near_batch = None
+                        best_near_score = max(
+                            (_boundary_proximity_score(d.get("extracted_value"), prob) for d in details_list),
+                            default=0.0
+                        )
                         for _ in range(self.max_resample_rounds):
                             total_resample_attempts += 1
                             total_resampled_candidates += self.micro_batch_size
@@ -287,6 +320,29 @@ class MiMoGRPOTrainer:
 
                                 was_resampled = True
                                 break
+                            else:
+                                batch_near = max(
+                                    (_boundary_proximity_score(d.get("extracted_value"), prob) for d in r_dets),
+                                    default=0.0
+                                )
+                                if batch_near > best_near_score:
+                                    best_near_score = batch_near
+                                    best_near_batch = (r_out, r_mask, r_old_lp, r_ref_lp, r_comps, r_metas, r_rws, r_dets)
+
+                        # 若重采样未直接命中 1.0，但发现了更接近真实反例分歧点的合法边界探测，注入该微批次
+                        if not was_resampled and best_near_batch is not None:
+                            r_out, r_mask, r_old_lp, r_ref_lp, r_comps, r_metas, r_rws, r_dets = best_near_batch
+                            last_m = self.num_micro_batches - 1
+                            micro_outputs_list[last_m] = r_out
+                            micro_masks_list[last_m] = r_mask
+                            micro_old_logprobs_list[last_m] = r_old_lp
+                            micro_ref_logprobs_list[last_m] = r_ref_lp
+                            s_idx = last_m * self.micro_batch_size
+                            for off in range(self.micro_batch_size):
+                                completions_text[s_idx + off] = r_comps[off]
+                                candidate_metas[s_idx + off] = r_metas[off]
+                                rewards_list[s_idx + off] = r_rws[off]
+                                details_list[s_idx + off] = r_dets[off]
 
                 # 记录失败分类详情与样本
                 for i, d in enumerate(details_list):
@@ -303,10 +359,18 @@ class MiMoGRPOTrainer:
                             "reward": d.get("reward", 0.0)
                         })
 
-                rewards = torch.tensor(rewards_list, dtype=torch.float32, device=self.device)
-                std_r = rewards.std().item()
                 solved_in_group = sum(1 for r in rewards_list if r >= 1.0)
                 total_solved += solved_in_group
+
+                # 当全组均未命中反例 (solved == 0) 且处于真实任务训练时，启用边界邻近度塑造信号打破零方差死锁
+                shaped_rewards_list = list(rewards_list)
+                if solved_in_group == 0 and hasattr(self.task, "compute_rewards_with_details"):
+                    prox = [_boundary_proximity_score(d.get("extracted_value"), prob) for d in details_list]
+                    if max(prox, default=0.0) - min(prox, default=0.0) > 1e-4:
+                        shaped_rewards_list = prox
+
+                rewards = torch.tensor(shaped_rewards_list, dtype=torch.float32, device=self.device)
+                std_r = rewards.std().item()
 
                 # 组内方差判定: 仅当替换后实际具有非零方差时才计入成功挽救
                 if 0 < solved_in_group < self.group_size and std_r > 1e-6:
@@ -323,8 +387,11 @@ class MiMoGRPOTrainer:
                 problem_active_tokens = sum(m_mask.sum().item() for m_mask in micro_masks_list)
                 total_tokens_generated += problem_active_tokens
 
-                # 组内方差为 0 且无 KL 时直接跳过反向传播
-                if std_r < 1e-6 and self.kl_coef == 0:
+                # 零方差过滤保护 (Zero-Variance Guard):
+                # 当组内奖励方差为 0 (全对 1.0 或全错 0.0) 且具备有效正样本或来自真实任务环境时跳过反传，
+                # 防止在全错题目上将基座参考分布的错误偏置向策略模型做逆向强化；
+                # 兼容纯 KL 回归测试 (当 dummy task 未实现 compute_rewards_with_details 时保留参考 KL 反传)。
+                if std_r < 1e-6 and (self.kl_coef == 0 or hasattr(self.task, "compute_rewards_with_details")):
                     continue
 
                 active_backward_problems += 1

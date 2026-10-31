@@ -8,12 +8,12 @@
   ],
   "aggregated_metrics": {
     "val_acc": {
-      "mean": 0.9,
-      "std": 0.0,
+      "mean": 0.9667,
+      "std": 0.0289,
       "values": [
-        0.9,
-        0.9,
-        0.9
+        0.95,
+        1.0,
+        0.95
       ]
     },
     "base_greedy": {
@@ -25,48 +25,66 @@
         0.4
       ]
     },
-    "checkpoint_best_greedy_pass1": {
-      "mean": 0.7833,
-      "std": 0.0289,
+    "base_sample_pass4": {
+      "mean": 0.55,
+      "std": 0.05,
       "values": [
-        0.8,
-        0.8,
+        0.55,
+        0.5,
+        0.6
+      ]
+    },
+    "base_candidate_hit_rate": {
+      "mean": 0.3,
+      "std": 0.0331,
+      "values": [
+        0.325,
+        0.2625,
+        0.3125
+      ]
+    },
+    "checkpoint_best_greedy_pass1": {
+      "mean": 0.85,
+      "std": 0.1,
+      "values": [
+        0.85,
+        0.95,
         0.75
       ]
     },
     "checkpoint_best_sample_pass4": {
-      "mean": 0.85,
-      "std": 0.0,
+      "mean": 0.9,
+      "std": 0.1323,
       "values": [
-        0.85,
-        0.85,
-        0.85
-      ]
-    },
-    "checkpoint_best_candidate_hit_rate": {
-      "mean": 0.75,
-      "std": 0.0331,
-      "values": [
-        0.7625,
-        0.7125,
-        0.775
-      ]
-    },
-    "checkpoint_last_greedy_pass1": {
-      "mean": 0.75,
-      "std": 0.0,
-      "values": [
-        0.75,
-        0.75,
+        0.95,
+        1.0,
         0.75
       ]
     },
-    "checkpoint_last_sample_pass4": {
-      "mean": 0.9167,
-      "std": 0.0289,
+    "checkpoint_best_candidate_hit_rate": {
+      "mean": 0.8042,
+      "std": 0.1134,
+      "values": [
+        0.7875,
+        0.925,
+        0.7
+      ]
+    },
+    "checkpoint_last_greedy_pass1": {
+      "mean": 0.9,
+      "std": 0.0,
       "values": [
         0.9,
         0.9,
+        0.9
+      ]
+    },
+    "checkpoint_last_sample_pass4": {
+      "mean": 0.9667,
+      "std": 0.0289,
+      "values": [
+        1.0,
+        0.95,
         0.95
       ]
     }
@@ -74,38 +92,38 @@
   "individual_runs": [
     {
       "label": "Seed 42",
-      "dir": "checkpoints_counterexample/20261014T102327Z-d1694cb8",
-      "best_step": 12,
-      "val_acc": 0.9,
+      "dir": "checkpoints_counterexample/20261027T172754Z-f7f89a53",
+      "best_step": 8,
+      "val_acc": 0.95,
       "base_greedy": 0.4,
-      "test_greedy": 0.8,
-      "test_sample_p4": 0.85,
-      "test_sample_hit": 0.7625,
-      "last_greedy": 0.75,
-      "last_sample_p4": 0.9
+      "test_greedy": 0.85,
+      "test_sample_p4": 0.95,
+      "test_sample_hit": 0.7875,
+      "last_greedy": 0.9,
+      "last_sample_p4": 1.0
     },
     {
       "label": "Seed 43",
-      "dir": "checkpoints_counterexample/20261014T132832Z-225a3239",
-      "best_step": 13,
-      "val_acc": 0.9,
+      "dir": "checkpoints_counterexample/20261027T180108Z-c068a69d",
+      "best_step": 11,
+      "val_acc": 1.0,
       "base_greedy": 0.4,
-      "test_greedy": 0.8,
-      "test_sample_p4": 0.85,
-      "test_sample_hit": 0.7125,
-      "last_greedy": 0.75,
-      "last_sample_p4": 0.9
+      "test_greedy": 0.95,
+      "test_sample_p4": 1.0,
+      "test_sample_hit": 0.925,
+      "last_greedy": 0.9,
+      "last_sample_p4": 0.95
     },
     {
       "label": "Seed 44",
-      "dir": "checkpoints_counterexample/20261014T135458Z-022190f1",
-      "best_step": 15,
-      "val_acc": 0.9,
+      "dir": "checkpoints_counterexample/20261027T183046Z-1c947c76",
+      "best_step": 7,
+      "val_acc": 0.95,
       "base_greedy": 0.4,
       "test_greedy": 0.75,
-      "test_sample_p4": 0.85,
-      "test_sample_hit": 0.775,
-      "last_greedy": 0.75,
+      "test_sample_p4": 0.75,
+      "test_sample_hit": 0.7,
+      "last_greedy": 0.9,
       "last_sample_p4": 0.95
     }
   ]

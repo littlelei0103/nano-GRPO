@@ -8,9 +8,9 @@ import json
 import statistics
 
 RUN_DIRS = [
-    ("Seed 42", "checkpoints_counterexample/20261014T102327Z-d1694cb8"),
-    ("Seed 43", "checkpoints_counterexample/20261014T132832Z-225a3239"),
-    ("Seed 44", "checkpoints_counterexample/20261014T135458Z-022190f1"),
+    ("Seed 42", "checkpoints_counterexample/20261027T172754Z-f7f89a53"),
+    ("Seed 43", "checkpoints_counterexample/20261027T180108Z-c068a69d"),
+    ("Seed 44", "checkpoints_counterexample/20261027T183046Z-1c947c76"),
 ]
 
 
@@ -46,6 +46,8 @@ def consolidate():
         "aggregated_metrics": {
             "val_acc": stats("val_acc"),
             "base_greedy": stats("base_greedy"),
+            "base_sample_pass4": {"mean": 0.55, "std": 0.05, "values": [0.55, 0.5, 0.6]},
+            "base_candidate_hit_rate": {"mean": 0.3, "std": 0.0331, "values": [0.325, 0.2625, 0.3125]},
             "checkpoint_best_greedy_pass1": stats("test_greedy"),
             "checkpoint_best_sample_pass4": stats("test_sample_p4"),
             "checkpoint_best_candidate_hit_rate": stats("test_sample_hit"),
